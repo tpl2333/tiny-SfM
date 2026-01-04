@@ -64,14 +64,6 @@ class FeatureMatcher:
         if des1 is None or des2 is None or len(des1) < 2 or len(des2) < 2:
             print("the number of keypoints less than 2")
             return None, []
-        
-        # --- RootSIFT 核心变换 ---
-        # L1 归一化
-        des1 /= (des1.sum(axis=1, keepdims=True) + 1e-7)
-        des2 /= (des2.sum(axis=1, keepdims=True) + 1e-7)
-        # 开方
-        des1 = np.sqrt(des1)
-        des2 = np.sqrt(des2)
     
         #1、knn match
         raw_matches = self.matcher.knnMatch(des1, des2, k=2)
