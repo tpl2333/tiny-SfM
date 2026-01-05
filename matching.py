@@ -1,22 +1,20 @@
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
+from frame import Frame
+from camera import Camera
 
 class FeatureMatcher:
-    def __init__(self, imgpath1, imgpath2, extractor_type='sift', threshold_pixel=3, degeneration=False):
-        self.imgpath1 = imgpath1
-        self.imgpath2 = imgpath2
-        self.extractor_type=extractor_type
-        self.threshold=threshold_pixel
+    def __init__(self, frame1:Frame,  frame2:Frame, extractor_type='sift', threshold_pixel=3, degeneration=False):
+
+        self.frame1 = frame1
+        self.frame2 = frame2
+        self.extractor_type = extractor_type
+        self.threshold = threshold_pixel
         self.degeneration = degeneration
 
-        self.img1 = cv2.imread(imgpath1)
-        self.img2 = cv2.imread(imgpath2)
-        if self.img1 is not None and self.img2 is not None:
-            self.grayimg1 = cv2.cvtColor(self.img1, cv2.COLOR_BGR2GRAY)
-            self.grayimg2 = cv2.cvtColor(self.img2, cv2.COLOR_BGR2GRAY)
-        else:
-            raise ValueError(f"Image path error! Cannot read {imgpath1} or {imgpath2}")
+        self.grayimg1 = cv2.cvtColor(frame1.img, cv2.COLOR_BGR2GRAY)
+        self.grayimg2 = cv2.cvtColor(frame2.img, cv2.COLOR_BGR2GRAY)
         
         if self.extractor_type == 'sift':
             self.extractor = cv2.SIFT_create()
@@ -25,7 +23,7 @@ class FeatureMatcher:
             self.extractor = cv2.ORB_create()
             norm_type = cv2.NORM_HAMMING 
         else:
-            print("Extractor selection error! Defaulting to SIFT")
+            print("[matching] Extractor selection error! Defaulting to SIFT")
             self.extractor = cv2.SIFT_create()
             norm_type = cv2.NORM_L2
         
@@ -33,9 +31,26 @@ class FeatureMatcher:
 
 
     def extracting(self):
+        """
+        修改后的提取函数：
+        1. 检查 Frame 是否已有特征点（避免重复计算）
+        2. 如果没有，计算并存入 Frame
+        """
+        # 处理 Frame 1
+        if self.frame1.kps is None or self.frame1.des is None:
+            kp1, des1 = self.extractor.detectAndCompute(self.grayimg1, None)
+            self.frame1.kps = kp1  
+            self.frame1.des = des1
+        else:
+            kp1, des1 = self.frame1.kps, self.frame1.des
 
-        kp1, des1 = self.extractor.detectAndCompute(self.grayimg1, None)
-        kp2, des2 = self.extractor.detectAndCompute(self.grayimg2, None)
+        # 处理 Frame 2
+        if self.frame2.kps is None or self.frame2.des is None:
+            kp2, des2 = self.extractor.detectAndCompute(self.grayimg2, None)
+            self.frame2.kps = kp2
+            self.frame2.des = des2
+        else:
+            kp2, des2 = self.frame2.kps, self.frame2.des
 
                 # class KeyPoint:
                 #     def __init__(self):
@@ -45,12 +60,11 @@ class FeatureMatcher:
                 #         self.response = 0.0         # 关键点的响应强度（越大表示越好）
                 #         self.octave = 0             # 关键点所在的金字塔层数
                 #         self.class_id = -1          # 关键点的类别ID
-
+                
                 # descriptor是一个NumPy数组，其形状为 (n_keypoints, descriptor_dimension)
 
-        return kp1, des1, kp2, des2
-    
-    def matching(self, kp1, des1, kp2, des2):
+
+    def matching(self):
         """
         kp1, kp2: 关键点数组
         des1, des2: 特征描述子数组
@@ -61,12 +75,12 @@ class FeatureMatcher:
             model_type: "F" or "H"
         """
 
-        if des1 is None or des2 is None or len(des1) < 2 or len(des2) < 2:
+        if self.frame1.des is None or self.frame2.des is None or len(self.frame1.des) < 2 or len(self.frame2.des) < 2:
             print("the number of keypoints less than 2")
             return None, []
     
         #1、knn match
-        raw_matches = self.matcher.knnMatch(des1, des2, k=2)
+        raw_matches = self.matcher.knnMatch(self.frame1.des, self.frame2.des, k=2)
 
                 # class DMatch:
                 #     def __init__(self):
@@ -94,8 +108,8 @@ class FeatureMatcher:
         if len(good_matches)>8:
             
             # 提取匹配点对，并转换为[N,1,2]的numpy格式
-            pts1 = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-            pts2 = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+            pts1 = np.float32([self.frame1.kps[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+            pts2 = np.float32([self.frame2.kps[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
 
             # 使用RANSAC计算基础矩阵
             # method = cv2.USAC_MAGSAC if hasattr(cv2, 'USAC_MAGSAC') else cv2.RANSAC
@@ -178,9 +192,9 @@ class FeatureMatcher:
             return None, []
 
         
-    def draw_matches(self, kp1, kp2, matches):
+    def draw_matches(self, matches):
         
-        img_match = cv2.drawMatches(self.img1, kp1, self.img2, kp2, matches, None, 
+        img_match = cv2.drawMatches(self.frame1.img, self.frame1.kps, self.frame2.img, self.frame2.kps, matches, None, 
                                     flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
         plt.figure(figsize=(12, 6))
         plt.imshow(cv2.cvtColor(img_match, cv2.COLOR_BGR2RGB))
@@ -223,26 +237,45 @@ class FeatureMatcher:
         
         return gric
     
-
 if __name__=="__main__":
 
     path1 = "./data/1.png" 
     path2 = "./data/2.png"
+   
+    cam = Camera() 
 
     try:
-        matcher = FeatureMatcher(path1, path2, extractor_type='sift',degeneration=True)
-        kp1, des1, kp2, des2 = matcher.extracting()
-        M, final_matches, model_type = matcher.matching(kp1, des1, kp2, des2)
+        # 1. 实例化 Frame
+        f1 = Frame(0, path1, cam)
+        f2 = Frame(1, path2, cam)
+
+        h, w, c = f1.img.shape
+        cam.set_size(h, w)
+        cam.setup_by_guess()
+
+        # 2. 匹配
+        matcher = FeatureMatcher(f1, f2, extractor_type='sift', degeneration=True)
+        
+        # 3. 提取 (此时会自动把特征存入 f1 和 f2)
+        matcher.extracting()
+        
+        # 4. 匹配 
+        M, final_matches, model_type = matcher.matching()
+        
         if M is not None:
             if model_type == "F":
                 print("\n基础矩阵 F:\n", M)
-                matcher.draw_matches(kp1, kp2, final_matches)
+                matcher.draw_matches(final_matches)   
             elif model_type == "H":
                 print("\n单应矩阵 H:\n", M)
-                matcher.draw_matches(kp1, kp2, final_matches)
+                matcher.draw_matches(final_matches)
+            else:
+                raise ValueError(f"[FeatureMatcher] model_type error!") 
+        else:
+            raise ValueError(f"[FeatureMatcher] Output matrix is None!")
+
     except Exception as e:
         print(f"发生错误: {e}")
-        print("提示：请确保目录下有 1.jpg 和 2.jpg，或者修改代码中的 path1, path2")
 
 
 
