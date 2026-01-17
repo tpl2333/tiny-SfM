@@ -131,7 +131,6 @@ class FeatureMatcher:
             else:  #Homography vs. Fundamentdal
                 
                 # 3.1 分别计算误差
-
                 # Homography 对称转移误差
                 H, mask_H = cv2.findHomography(pts1, pts2, method, ransacReprojThreshold=self.threshold, confidence=0.999)
 
@@ -169,24 +168,32 @@ class FeatureMatcher:
                     GRIC_F = self.calculate_GRIC(sampson_errors, len(good_matches), model_type="F")
 
                 #3.2 GRIC选择模型
-                if GRIC_H>GRIC_F:
-                    #选择基本矩阵模型，筛选内点
-                    matches_mask = mask_F.ravel().tolist()
-                    inlier_matches=[]
-                    for i, match in enumerate(good_matches):
-                        if matches_mask[i]==1:
-                            inlier_matches.append(match)
-                    
-                    return F, inlier_matches, "F"
-                else:
-                    #选择单应矩阵模型，筛选内点
+                inliers_H_num = np.sum(mask_H)
+                inliers_F_num = np.sum(mask_F)
+                
+                # 如果 H 的内点数接近 F 的内点数 (例如 > 80%)，强制选择 H 防止平面场景被过拟合为 F
+                ratio = inliers_H_num / (inliers_F_num + 1e-8)
+                
+                print(f"GRIC_H: {GRIC_H:.2f}, GRIC_F: {GRIC_F:.2f}")
+                print(f"Inliers H: {inliers_H_num}, Inliers F: {inliers_F_num}, Ratio: {ratio:.2f}")
+
+                # 如果 GRIC 倾向于 H，或者 H 的内点比率足够高，就选 H
+                if GRIC_H < GRIC_F or ratio > 0.8: 
+                    print("Select H (Planar/Rotation)")
                     matches_mask = mask_H.ravel().tolist()
                     inlier_matches=[]
                     for i, match in enumerate(good_matches):
                         if matches_mask[i]==1:
                             inlier_matches.append(match)
-                    
                     return H, inlier_matches, "H"
+                else:
+                    print("Select F (General 3D)")
+                    matches_mask = mask_F.ravel().tolist()
+                    inlier_matches=[]
+                    for i, match in enumerate(good_matches):
+                        if matches_mask[i]==1:
+                            inlier_matches.append(match)
+                    return F, inlier_matches, "F"
         else:
             print("the number of good_matches less than 8")
             return None, []
