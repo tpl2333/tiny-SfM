@@ -3,20 +3,27 @@ import cv2
 from camera import Camera
 
 class Frame:
-    def __init__(self, idx, img_path, camera:Camera):
+    # Frame idx
+    _counter = 0
+
+    def __init__(self, img_path, camera:Camera):
         """
         idx: 帧的全局唯一索引 (int)
         img_path: 图像路径
         camera: 关联的 Camera 对象 (引用)
         """
-        self.idx = idx
+
+        self.idx = Frame._counter
+        Frame._counter += 1
+
         self.img_path = img_path
         self.img = cv2.imread(self.img_path)
-        self.camera = camera  # 共享的内参对象
+        self.camera = camera  
+
         if self.img is None:
             raise ValueError(f"[Frame] Image path error! Cannot read {self.img_path} ")
         
-        # 1. 特征数据 
+        # 特征数据 
         # 这一步可以在初始化时提取，也可以懒加载
         self.kps = None  # 关键点 (N, 2)
         self.des = None  # 描述子 (N, D)
@@ -24,12 +31,16 @@ class Frame:
         # 颜色信息，用于后续点云着色
         self.colors = None 
 
-        # 2. 外参——世界坐标系到相机坐标系
+        # 外参——世界坐标系到相机坐标系
         # T_cw: World -> Camera
         # P = K[R|t]
         self.R = np.eye(3) 
         self.t = np.zeros((3, 1))
-        
+
+        # 此图像注册的3D点
+        # index：MapPoint (index来自Frame.kps[index])
+        self.map_point = {}
+
         # 标记该帧是否已经注册到地图中
         self.is_registered = False 
 

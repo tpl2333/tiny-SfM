@@ -105,8 +105,8 @@ if __name__=="__main__":
 
     try:
         # 1. 实例化 Frame
-        f1 = Frame(0, path1, cam)
-        f2 = Frame(1, path2, cam)
+        f1 = Frame(path1, cam)
+        f2 = Frame(path2, cam)
 
         h, w, c = f1.img.shape
         cam.set_size(h, w)

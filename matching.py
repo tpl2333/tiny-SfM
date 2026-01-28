@@ -115,7 +115,8 @@ class FeatureMatcher:
             # method = cv2.USAC_MAGSAC if hasattr(cv2, 'USAC_MAGSAC') else cv2.RANSAC
             method = cv2.RANSAC
 
-            if not self.degeneration: #认为完全不会退化，选择基本矩阵模型
+            if not self.degeneration: 
+            #认为完全不会退化，选择基本矩阵模型
                 F, mask = cv2.findFundamentalMat(pts1, pts2, method, ransacReprojThreshold=self.threshold, confidence=0.999)
 
                     #mask是N*1的numpy数组，1表示内点（符合基础矩阵），0表示外点（不符合）
@@ -128,7 +129,8 @@ class FeatureMatcher:
                         inlier_matches.append(match)
                 
                 return F, inlier_matches, "F"
-            else:  #Homography vs. Fundamentdal
+            else:  
+            #Homography vs. Fundamentdal
                 
                 # 3.1 分别计算误差
                 # Homography 对称转移误差
@@ -147,7 +149,6 @@ class FeatureMatcher:
                     total_errors = (error_fwd + error_bwd)/2
 
                     GRIC_H = self.calculate_GRIC(total_errors, len(good_matches), model_type="H")
-
 
                 # Fundamentdal Sampson误差
                 F, mask_F = cv2.findFundamentalMat(pts1, pts2, method, ransacReprojThreshold=self.threshold, confidence=0.999)
@@ -253,8 +254,8 @@ if __name__=="__main__":
 
     try:
         # 1. 实例化 Frame
-        f1 = Frame(0, path1, cam)
-        f2 = Frame(1, path2, cam)
+        f1 = Frame(path1, cam)
+        f2 = Frame(path2, cam)
 
         h, w, c = f1.img.shape
         cam.set_size(h, w)
