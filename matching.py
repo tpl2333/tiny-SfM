@@ -245,6 +245,13 @@ class FeatureMatcher:
         
         return gric
     
+    def forward(self, frame1:Frame, frame2:Frame,):
+
+        matcher.extracting()
+        M, final_matches, model_type = matcher.matching()
+
+        return M, final_matches, model_type
+    
 if __name__=="__main__":
 
     path1 = "./data/1.png" 

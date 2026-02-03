@@ -1,6 +1,10 @@
+from __future__ import annotations
 import numpy as np
 import cv2
 from camera import Camera
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from mappoint import Point
 
 class Frame:
     # Frame idx
@@ -38,8 +42,8 @@ class Frame:
         self.t = np.zeros((3, 1))
 
         # 此图像注册的3D点
-        # index：MapPoint (index来自Frame.kps[index])
-        self.map_point = {}
+        # index：Point (index来自Frame.kps[index])
+        self.points = {}
 
         # 标记该帧是否已经注册到地图中
         self.is_registered = False 
@@ -70,3 +74,9 @@ class Frame:
         公式: C = -R^T * t
         """
         return -np.dot(self.R.T, self.t)
+    
+    def add_points(self, point:Point, feature_idx):
+
+        if feature_idx not in self.points:
+            self.points[feature_idx] = point
+

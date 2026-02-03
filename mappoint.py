@@ -1,36 +1,35 @@
+from __future__ import annotations
 import cv2
 import numpy as np
 from camera import Camera
-from frame import Frame
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from frame import Frame
 
-class MapPoint:
+class Point:
+
     _counter = 0
 
     def __init__(self, point):
 
-        self.idx = MapPoint._counter
-        MapPoint._counter += 1
+        self.idx = Point._counter
+        Point._counter += 1
 
         self.position = point
         self.color = None
 
         # 该3D点可以被观察到的图像以及对应的关键点 
-        # Frame.idx:index (index来自Frame.kps[index])
-        self.observation = {}
+        # 字典键值对： Frame.idx:index (index来自Frame.kps[index])
+        self.observations = {}
     
     def add_observation(self, frame:Frame, feature_idx):
 
-        if frame.id not in self.observations:
-
-            self.observations[frame.id] = feature_idx
+        if frame.idx not in self.observations:
+            self.observations[frame.idx] = feature_idx
             # 可以在这里增加计数器，用于统计该点的被观测次数，决定是否剔除坏点
 
-        if frame.map_points[feature_idx] is None:
 
-            frame.map_points[feature_idx] = self
-
-
-class Map:
+class Scene:
     def __init__(self):
         
         self.map_points = [] # 存储所有的 MapPoint 对象实例
@@ -38,6 +37,9 @@ class Map:
 
     def add_point(self, mp):
         self.map_points.append(mp)
+    
+    def add_frame(self, frame):
+        self.keyframes.append(frame)
         
     def get_all_points_as_array(self):
         # 专门为了 Open3D 可视化提供的方法

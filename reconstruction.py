@@ -4,9 +4,12 @@ import open3d as o3d
 from matching import FeatureMatcher
 from camera import Camera
 from frame import Frame
+from mappoint import Scene, Point
 
 class Reconstruction:
-    def __init__(self, frame1:Frame, frame2:Frame, matches:list):
+    def __init__(self, frame1:Frame, frame2:Frame, matches:list, scene:Scene):
+
+        self.scene = scene
 
         self.frame1 = frame1
         self.frame2 = frame2
@@ -44,12 +47,33 @@ class Reconstruction:
         Points4D = cv2.triangulatePoints(P1, P2, pts1, pts2)
         # Points4D的形状为[4, N] 
 
+        if Points4D is not None:
+            scene.add_frame(self.frame1)
+            scene.add_frame(self.frame2)
+
         xyz = Points4D[:3, :] #[3, N]
         w = Points4D[3:, :]   #[1, N]
         Points_normalized = (xyz / w).T #归一化并转置 [N, 3]
 
         self.Points_normalized = Points_normalized
-    
+
+    def register_points(self):
+        
+        for i, point_coordi in enumerate(self.Points_normalized):
+
+            mappoint = Point(point_coordi)
+
+            idx1 = self.D_inlier_matches[i].queryIdx
+            idx2 = self.D_inlier_matches[i].trainIdx
+
+            mappoint.add_observation(self.frame1, idx1)
+            mappoint.add_observation(self.frame2, idx2)
+
+            self.frame1.add_points(mappoint,idx1)
+            self.frame2.add_points(mappoint,idx2)
+
+            self.scene.add_point(mappoint)
+
     def get_points_color(self):
 
         colors = []
@@ -92,19 +116,20 @@ class Reconstruction:
 
         self.recover_pose()
         self.triangulation()
+        self.register_points()
         self.get_points_color()
         self.visualize_point_cloud()
-
 
 if __name__=="__main__":
 
     path1 = "./data/1.png" 
     path2 = "./data/2.png"
-   
-    cam = Camera() 
+
+    cam = Camera()
+    scene = Scene()
 
     try:
-        # 1. 实例化 Frame
+
         f1 = Frame(path1, cam)
         f2 = Frame(path2, cam)
 
@@ -112,34 +137,57 @@ if __name__=="__main__":
         cam.set_size(h, w)
         cam.setup_by_guess()
 
-        # 2. 匹配
         matcher = FeatureMatcher(f1, f2, extractor_type='sift', degeneration=True)
-        
-        # 3. 提取 (此时会自动把特征存入 f1 和 f2)
         matcher.extracting()
-        
-        # 4. 匹配 
         M, final_matches, model_type = matcher.matching()
-        
-        if M is not None:
-            if model_type == "F":
-                print("\n基础矩阵 F:\n", M)  
-            elif model_type == "H":
-                print("\n单应矩阵 H:\n", M)
-            else:
-                raise ValueError(f"[FeatureMatcher] model_type error!") 
-        else:
-            raise ValueError(f"[FeatureMatcher] Output matrix is None!")
-        
-        reconstructor = Reconstruction(f1,f2,final_matches)
+
+        reconstructor = Reconstruction(f1,f2,final_matches,scene)
         reconstructor.forward()
+
+        print(f"图片数量：{len(scene.keyframes)}\n")
+        print(f"三维点数量：{len(scene.map_points)}\n")
 
     except Exception as e:
         print(f"发生错误: {e}")
 
+
+# if __name__=="__main__":
+
+#     path1 = "./data/1.png" 
+#     path2 = "./data/2.png"
+   
+#     cam = Camera() 
+
+#     try:
+#         # 1. 实例化 Frame
+#         f1 = Frame(path1, cam)
+#         f2 = Frame(path2, cam)
+
+#         h, w, c = f1.img.shape
+#         cam.set_size(h, w)
+#         cam.setup_by_guess()
+
+#         # 2. 匹配
+#         matcher = FeatureMatcher(f1, f2, extractor_type='sift', degeneration=True)
         
+#         # 3. 提取 (此时会自动把特征存入 f1 和 f2)
+#         matcher.extracting()
+        
+#         # 4. 匹配 
+#         M, final_matches, model_type = matcher.matching()
+        
+#         if M is not None:
+#             if model_type == "F":
+#                 print("\n基础矩阵 F:\n", M)  
+#             elif model_type == "H":
+#                 print("\n单应矩阵 H:\n", M)
+#             else:
+#                 raise ValueError(f"[FeatureMatcher] model_type error!") 
+#         else:
+#             raise ValueError(f"[FeatureMatcher] Output matrix is None!")
+        
+#         reconstructor = Reconstruction(f1,f2,final_matches)
+#         reconstructor.forward()
 
-
-
-
-
+#     except Exception as e:
+#         print(f"发生错误: {e}")
