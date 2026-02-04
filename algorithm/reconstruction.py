@@ -1,11 +1,11 @@
 import cv2
 import numpy as np
 import open3d as o3d
-from matching import FeatureMatcher
-from camera import Camera
-from frame import Frame
-from mappoint import Point
-from map import Map
+#from matching import FeatureMatcher
+from model.camera import Camera
+from model.frame import Frame
+from model.mappoint import Point
+from model.worldmap import Map
 
 class Reconstruction:
     def __init__(self, frame1:Frame, frame2:Frame, matches:list, map:Map):
@@ -52,13 +52,24 @@ class Reconstruction:
             self.map.add_frame(self.frame1)
             self.map.add_frame(self.frame2)
 
-        xyz = Points4D[:3, :] #[3, N]
-        w = Points4D[3:, :]   #[1, N]
-        Points_normalized = (xyz / w).T #归一化并转置 [N, 3]
+            xyz = Points4D[:3, :] #[3, N]
+            w = Points4D[3:, :]   #[1, N]
+            Points_normalized = (xyz / w).T #归一化并转置 [N, 3]
 
-        self.Points_normalized = Points_normalized
+            self.Points_normalized = Points_normalized
 
-    def register_points(self):
+            self.register()
+        else:
+            print("三角化失败，Point4D为None")
+
+    def register(self):
+
+        assert len(self.D_inlier_matches)==len(self.Points_normalized), "三角化失败，深度内点与实际三角化点数量不一致"
+
+        if not self.frame1.is_registered:
+            self.map.add_frame(self.frame1)
+        if not self.frame2.is_registered:
+            self.map.add_frame(self.frame2)
         
         for i, point_coordi in enumerate(self.Points_normalized):
 
@@ -70,8 +81,8 @@ class Reconstruction:
             mappoint.add_observation(self.frame1, idx1)
             mappoint.add_observation(self.frame2, idx2)
 
-            self.frame1.add_points(mappoint,idx1)
-            self.frame2.add_points(mappoint,idx2)
+            self.frame1.add_points(mappoint.idx,idx1)
+            self.frame2.add_points(mappoint.idx,idx2)
 
             self.map.add_point(mappoint)
 
@@ -117,35 +128,34 @@ class Reconstruction:
 
         self.recover_pose()
         self.triangulation()
-        self.register_points()
         self.get_points_color()
         self.visualize_point_cloud()
 
-if __name__=="__main__":
+# if __name__=="__main__":
 
-    path1 = "./data/1.png" 
-    path2 = "./data/2.png"
-    map = Map()
+#     path1 = "./data/1.png" 
+#     path2 = "./data/2.png"
+#     map = Map()
 
-    try:
+#     try:
 
-        cam = Camera()
-        f1 = Frame(path1, cam)
-        f2 = Frame(path2, cam)
+#         cam = Camera()
+#         f1 = Frame(path1, cam)
+#         f2 = Frame(path2, cam)
 
-        h, w, c = f1.img.shape
-        cam.set_size(h, w)
-        cam.setup_by_guess()
+#         h, w, c = f1.img.shape
+#         cam.set_size(h, w)
+#         cam.setup_by_guess()
 
-        matcher = FeatureMatcher(f1, f2, extractor_type='sift', degeneration=True)
-        matcher.extracting()
-        M, final_matches, model_type = matcher.matching()
+#         matcher = FeatureMatcher(f1, f2, extractor_type='sift', degeneration=True)
+#         matcher.extracting()
+#         M, final_matches, model_type = matcher.matching()
 
-        reconstructor = Reconstruction(f1,f2,final_matches,map)
-        reconstructor.forward()
+#         reconstructor = Reconstruction(f1,f2,final_matches,map)
+#         reconstructor.forward()
 
-        print(f"图片数量：{len(map.keyframes)}\n")
-        print(f"三维点数量：{len(map.map_points)}\n")
+#         print(f"图片数量：{len(map.frames)}\n")
+#         print(f"三维点数量：{len(map.points)}\n")
 
-    except Exception as e:
-        print(f"发生错误: {e}")
+#     except Exception as e:
+#         print(f"发生错误: {e}")

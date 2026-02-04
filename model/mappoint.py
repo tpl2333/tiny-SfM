@@ -1,7 +1,7 @@
 from __future__ import annotations
 import cv2
 import numpy as np
-from camera import Camera
+from model.camera import Camera
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from frame import Frame
@@ -21,6 +21,8 @@ class Point:
         # 该3D点可以被观察到的图像以及对应的关键点 
         # 字典键值对： Frame.idx:index (index来自Frame.kps[index])
         self.observations = {}
+
+        self.is_bad = False
     
     def add_observation(self, frame:Frame, feature_idx):
 

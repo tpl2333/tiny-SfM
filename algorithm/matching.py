@@ -1,8 +1,8 @@
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-from frame import Frame
-from camera import Camera
+from model.frame import Frame
+from model.camera import Camera
 
 class FeatureMatcher:
     def __init__(self, frame1:Frame,  frame2:Frame, extractor_type='sift', threshold_pixel=3, degeneration=False):
@@ -60,6 +60,7 @@ class FeatureMatcher:
                 #         self.response = 0.0         # 关键点的响应强度（越大表示越好）
                 #         self.octave = 0             # 关键点所在的金字塔层数
                 #         self.class_id = -1          # 关键点的类别ID
+                # kp 是KeyPoints列表
                 
                 # descriptor是一个NumPy数组，其形状为 (n_keypoints, descriptor_dimension)
 
