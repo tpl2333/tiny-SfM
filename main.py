@@ -11,8 +11,8 @@ from algorithm.matching import FeatureMatcher
 from algorithm.reconstruction import Reconstruction
 from algorithm.ba import BA
 
-path1 = "./data/1.png" 
-path2 = "./data/2.png"
+path1 = "./data/aloeL.jpg" 
+path2 = "./data/aloeR.jpg"
 map_obj = Map()
 
 try:

@@ -41,7 +41,7 @@ class Camera:
         self.height = height
 
     # 初始化途径一：猜
-    def setup_by_guess(self, fov_scale=1.2):
+    def setup_by_guess(self, fov_scale=0.8):
         """
         接口1：当没有标定数据时，根据图像尺寸粗略估计内参。
         通常假设光心在图像中心，焦距为图像宽度的 1.2 倍左右。

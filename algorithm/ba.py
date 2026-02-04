@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import scipy
 import scipy.optimize 
+from scipy.sparse import lil_matrix
 
 from model.camera import Camera
 from model.frame import Frame
@@ -101,11 +102,15 @@ class BA:
     def optimize(self):
         """执行优化"""
         x0 = self.pack_params()
+
+        sparsity = self.get_sparsity_matrix(x0)
         
         # 使用更具鲁棒性的损失函数 (loss='soft_l1') 来抑制外点
         res = scipy.optimize.least_squares(
             self.get_residuals, 
             x0, 
+            jac_sparsity=sparsity,
+            x_scale='jac',
             method='trf', 
             loss='soft_l1', 
             f_scale=1.0, # 这里的 f_scale 相当于像素误差的阈值
@@ -113,7 +118,38 @@ class BA:
         )
         
         self.unpack_params(res.x)
-        print(f"BA 优化完成。初始误差: {np.linalg.norm(res.fun):.2f}")                
+        print(f"BA 优化完成。初始误差: {np.linalg.norm(res.fun):.2f}") 
+
+    def get_sparsity_matrix(self, params):
+        n_res = 0
+        # 先数一下总共有多少个残差
+        for pt in self.map.points.values():
+            if pt.is_bad: continue
+            n_res += len(pt.observations) * 2
+        
+        n_params = len(params)
+        # 使用 lil_matrix 方便稀疏矩阵的构建
+        sparsity = lil_matrix((n_res, n_params), dtype=int)
+        
+        res_idx = 0
+        for pt_idx, pt in self.map.points.items():
+            if pt.is_bad: continue
+            
+            # 3D点在 params 中的起始位置
+            p_start = self.point_2_params_idx[pt_idx]
+            
+            for frame_idx, _ in pt.observations.items():
+                # 1. 标记该残差与 3D 点参数的相关性 (3个坐标)
+                sparsity[res_idx : res_idx + 2, p_start : p_start + 3] = 1
+                
+                # 2. 标记该残差与 相机位姿参数的相关性 (6个参数)
+                if frame_idx != 0: # 第0帧固定，不相关
+                    f_start = self.frame_2_params_idx[frame_idx]
+                    sparsity[res_idx : res_idx + 2, f_start : f_start + 6] = 1
+                    
+                res_idx += 2
+                
+        return sparsity               
 
                 
 
