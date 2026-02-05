@@ -12,12 +12,13 @@ class CameraSource(Enum):
     OPTIMIZED = 3   # 优化值 (来自BA的结果，信度最高)
 
 class Camera:
-    def __init__(self, width=None, height=None):
+    def __init__(self, width=None, height=None, is_dist = True):
         """
         初始化相机对象，必须知道图像尺寸。
         """
         self.width = width
         self.height = height
+        self.is_dist = is_dist
         
         # 核心数据：内参矩阵 K (3x3) 和 畸变系数 D (1x5 or 1xN)
         self._K = np.eye(3, dtype=np.float64)
@@ -27,7 +28,7 @@ class Camera:
         self.source = CameraSource.UNKNOWN
         
         # 锁定机制：如果为 True，在优化阶段不应该修改此相机的参数
-        self.locked = False 
+        self.is_locked = False 
 
     def set_size(self, height, width):
         """
@@ -41,7 +42,7 @@ class Camera:
         self.height = height
 
     # 初始化途径一：猜
-    def setup_by_guess(self, fov_scale=0.8):
+    def setup_by_guess(self, fov_scale=1.2, lock_it = False):
         """
         接口1：当没有标定数据时，根据图像尺寸粗略估计内参。
         通常假设光心在图像中心，焦距为图像宽度的 1.2 倍左右。
@@ -62,8 +63,13 @@ class Camera:
         self._dist = np.zeros((5, 1), dtype=np.float64) # 猜测时通常假设无畸变
         
         self.source = CameraSource.GUESS
-        self.locked = False 
-        print(f"[Camera] Initialized by GUESS. K:\n{self._K}")
+        
+        if lock_it:
+            self.is_locked = True 
+            print(f"[Camera] Initialized by GUESS. Locked={self.is_locked}")
+        else:
+            self.is_locked = False 
+            print(f"[Camera] Initialized by GUESS. K:\n{self._K}")
 
     # 初始化途径二：标定
     def setup_by_calibration(self, height, width, K, dist, lock_it=True):
@@ -79,9 +85,10 @@ class Camera:
         self._dist = np.array(dist, dtype=np.float64)
         
         self.source = CameraSource.CALIBRATED
-
-        self.locked = lock_it 
-        print(f"[Camera] Initialized by CALIBRATION. Locked={self.locked}")
+        
+        if lock_it:
+            self.is_locked = True 
+            print(f"[Camera] Initialized by CALIBRATION. Locked={self.is_locked}")
 
     # 优化途径：来自整体优化 (留给 BA 的接口)
     def get_params_vector(self):
@@ -89,27 +96,29 @@ class Camera:
         [导出接口]
         将内参“扁平化”为一个向量，供优化器（如 scipy.optimize 或 Ceres）使用。
         通常优化器只认 vector，不认 matrix。
-        返回格式示例: [fx, fy, cx, cy, k1, k2, p1, p2]
+        返回格式示例: [fx, fy, cx, cy, k1, k2, p1, p2, k3]
         """
         # 提取 fx, fy, cx, cy
         fx = self._K[0, 0]
         fy = self._K[1, 1]
         cx = self._K[0, 2]
         cy = self._K[1, 2]
-        
-        # 提取畸变 (假设是标准的5参数模型)
-        d = self._dist.flatten()
-        
-        # 拼接
-        params = np.array([fx, fy, cx, cy, d[0], d[1], d[2], d[3], d[4]])
-        return params
+
+        if self.is_dist:  
+
+            d = self._dist.flatten()
+            params = np.array([fx, fy, cx, cy, d[0], d[1], d[2], d[3], d[4]])
+            return params
+        else:
+            params = np.array([fx, fy, cx, cy])
+            return params
 
     def update_from_optimization(self, params_vector):
         """
         [导入接口]
         接收优化器计算出的新向量，更新内部状态。
         """
-        if self.locked:
+        if self.is_locked:
             print("[Camera] Warning: Attempting to update a LOCKED camera. Ignored.")
             return
 
@@ -118,10 +127,10 @@ class Camera:
         self._K[1, 1] = fy
         self._K[0, 2] = cx
         self._K[1, 2] = cy
-        
-        self._dist = params_vector[4:].reshape(-1, 1)
-        
-        self.source = CameraSource.OPTIMIZED
+
+        if self.is_dist:
+            self._dist = params_vector[4:].reshape(-1, 1)      
+            self.source = CameraSource.OPTIMIZED
 
     @property
     def K(self):

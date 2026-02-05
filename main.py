@@ -11,19 +11,19 @@ from algorithm.matching import FeatureMatcher
 from algorithm.reconstruction import Reconstruction
 from algorithm.ba import BA
 
-path1 = "./data/aloeL.jpg" 
-path2 = "./data/aloeR.jpg"
+path1 = "./data/rathaus/rdimage.001.ppm" 
+path2 = "./data/rathaus/rdimage.002.ppm"
 map_obj = Map()
 
 try:
     # 1. 基础设置与特征匹配
-    cam = Camera()
+    cam = Camera(is_dist=False)
     f1 = Frame(path1, cam)
     f2 = Frame(path2, cam)
 
     h, w, _ = f1.img.shape
     cam.set_size(h, w)
-    cam.setup_by_guess() # 假设焦距并初始化 K
+    cam.setup_by_guess(lock_it=True) # 假设焦距并初始化 K
 
     matcher = FeatureMatcher(f1, f2, extractor_type='sift', degeneration=True)
     matcher.extracting()
@@ -40,16 +40,21 @@ try:
     print(f"初始重建完成:")
     print(f"图片数量: {len(map_obj.frames)}")
     print(f"三维点数量: {len(map_obj.points)}")
-    print(f"Frame 2 初始位姿 t:\n{f2.t.flatten()}")
+    print(f"Camera 初始内参K:\n{f1.camera.K}")
+    print(f"Frame 2 初始位置 t:\n{f2.t.flatten()}")
+    print(f"Frame 2 初始旋转 R:\n{f2.R}")
     print("-" * 30)
 
     # 3. Bundle Adjustment 优化
     print("开始 Bundle Adjustment 优化...")
     optimizer = BA(map_obj)
     optimizer.optimize() 
+    optimizer.calculate_rmse()
 
     print("-" * 30)
-    print(f"优化后的 Frame 2 位姿 t:\n{f2.t.flatten()}")
+    print(f"优化后Camera 内参K:\n{f1.camera.K}")
+    print(f"优化后Frame 2 位置 t:\n{f2.t.flatten()}")
+    print(f"优化后Frame 2 旋转 R:\n{f2.R}")
     
     # 4. 可视化优化后的结果
     # 注意：我们需要手动更新 reconstructor 里的点云数据用于显示
