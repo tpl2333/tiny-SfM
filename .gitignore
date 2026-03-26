@@ -1,0 +1,30 @@
+# --- 核心编译目录 (最重要) ---
+# 既然你的 vcpkg_installed 也在 build 里，这一行就屏蔽了所有垃圾
+build/
+out/
+
+# --- C++ 编译产生的二进制插件 ---
+# 如果你把编译好的 pyd 拷贝到了根目录测试，不希望它进 Git，就取消下面两行的注释
+# *.pyd
+# *.so
+
+# --- Python 相关 ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+
+# --- IDE & 编辑器相关 ---
+.vscode/
+.vs/
+*.swp
+*.bak
+*.user
+
+# --- 操作系统临时文件 ---
+Thumbs.db
+.DS_Store

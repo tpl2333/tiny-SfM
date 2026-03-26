@@ -1,0 +1,27 @@
+1、
+# kp 是KeyPoint类列表 即List[cv2.KeyPoint]
+# descriptor是一个NumPy数组，其形状为 (keypoint_num, descriptor_dimension)   
+# class KeyPoint:
+#     def __init__(self):
+#         self.pt = (0.0, 0.0)        # 关键点的(x, y)坐标
+#         self.size = 0.0             # 关键点的直径（特征区域大小）
+#         self.angle = -1.0           # 关键点的方向（角度，-1表示未指定）
+#         self.response = 0.0         # 关键点的响应强度（越大表示越好）
+#         self.octave = 0             # 关键点所在的金字塔层数
+#         self.class_id = -1          # 关键点的类别ID
+
+2、
+# class DMatch:
+#     def __init__(self):
+#         self.queryIdx = -1      # 查询图像中描述符的索引
+#         self.trainIdx = -1      # 训练图像中描述符的索引
+#         self.imgIdx = -1        # 训练图像的索引（用于多图像匹配）
+#         self.distance = 0.0     # 两个描述符之间的距离
+
+# Match返回DMatch列表，knnMatch返回二维DMatch列表，例如当k=2时返回
+# [
+#     [DMatch1, DMatch2],  # 第1个查询描述符的2个最佳匹配
+#     [DMatch1, DMatch2],  # 第2个查询描述符的2个最佳匹配
+#     ...,
+#     [DMatch1, DMatch2]   # 第N个查询描述符的2个最佳匹配
+# ]

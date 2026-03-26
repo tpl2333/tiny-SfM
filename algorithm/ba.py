@@ -106,6 +106,7 @@ class BA:
                 z = pc[2, 0]
                 x_n, y_n = pc[0,0]/z, pc[1,0]/z 
 
+                # 对于frame共用内参的优化
                 if self.intrisic_2_params_idx is None:
                     #无畸变，不优化
                     K = frame.camera.K

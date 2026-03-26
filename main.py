@@ -7,12 +7,12 @@ from model.frame import Frame
 from model.mappoint import Point
 from model.worldmap import Map
 
-from algorithm.matching import FeatureMatcher
+from algorithm.match import FeatureMatcher
 from algorithm.reconstruction import Reconstruction
 from algorithm.ba import BA
 
-path1 = "./data/rathaus/rdimage.001.ppm" 
-path2 = "./data/rathaus/rdimage.002.ppm"
+path1 = "./data/aloeL.jpg" 
+path2 = "./data/aloeR.jpg"
 map_obj = Map()
 
 try:
