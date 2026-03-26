@@ -1,9 +1,0 @@
-{
-    "name": "mvg-ba-backend",
-    "version-string": "0.1.0",
-    "dependencies": [
-      "pybind11",
-      "ceres",
-      "eigen3"
-    ]
-  }

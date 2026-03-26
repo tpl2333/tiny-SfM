@@ -1,4 +1,0 @@
-26/3/13：match是matching修改后的版本
-
-26/3/15：更新了frame/worldmap/mappoint 三个脚本文件，
-                同时reconstruct是reconstruction修改后的版本（但是还没有完成）
