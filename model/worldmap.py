@@ -29,7 +29,6 @@ class Map:
         frame = Frame(img_path, self._camera)
         self._frames[frame.idx] = frame
             
-
     def load_frame_dir(self, img_dir):
 
         allowed_suffixes = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff'}
@@ -54,23 +53,6 @@ class Map:
         self._registered_ids.add(frame.idx)
         frame.is_registered = True
 
-    def add_observation(self, point_idx, frame_idx, feature_idx):
-
-        if point_idx not in self._points:
-            raise KeyError(f"[Map] Point ID {point_idx} not in Map")
-        if frame_idx not in self._frames:
-            raise KeyError(f"[Map] Frame ID {frame_idx} not in Map")
-
-        point = self._points[point_idx]
-        frame = self._frames[frame_idx]
-
-        point.add_observation(frame_idx, feature_idx)
-        frame.add_observation(feature_idx, point_idx)
-
-    def del_observation(self, point_idx, frame_idx, feature_idx):
-
-        pass
-
     def create_point(self, position3d, color=None):
 
         return Point(position3d, color)
@@ -83,13 +65,26 @@ class Map:
         point.set_index() 
         self._points[point.idx] = point
         return point.idx
-        
+    
+    def add_observation(self, point_idx, frame_idx, feature_idx):
+
+        if point_idx not in self._points:
+            raise KeyError(f"[Map] Point ID {point_idx} not in Map")
+        if frame_idx not in self._frames:
+            raise KeyError(f"[Map] Frame ID {frame_idx} not in Map")
+
+        point = self._points[point_idx]
+        frame = self._frames[frame_idx]
+
+        point.add_observation(frame_idx, feature_idx)
+        frame.add_observation(feature_idx, point_idx)   
+
+
     def get_point(self, point_idx):
         return self._points.get(point_idx)
 
     def get_frame(self, frame_idx):
         return self._frames.get(frame_idx)
     
-    def remove_point(self, point_idx):
-        if point_idx in self.points:
-            del self.points[point_idx]
+
+        
