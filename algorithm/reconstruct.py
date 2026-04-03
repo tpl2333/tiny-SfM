@@ -15,7 +15,7 @@ class Reconstructor:
         # 参数什么的写这里
         self.parameter = None
 
-    # -------顶层运行层-------
+    # -------顶层运行层(temporal)-------
     def run(self):
         """
         多视图重建主循环：从初始化开始，逐帧注册并扩展地图。
@@ -68,8 +68,7 @@ class Reconstructor:
         print(f"最终结果: 共注册 {len(self.map._registered_ids)} 帧, 生成 {len(self.map._points)} 个地图点。")
         print("-" * 30)
 
-    # -------任务编排层-------
-
+    # -------任务编排层(temporal)-------
     def initialize_worldmap(self, frame_dir):
 
         # 1. 初始化map
@@ -81,18 +80,18 @@ class Reconstructor:
         frame2_idx = self.map.unregistered_frames[1]
 
         # 3. 提取初始化帧对的图像特征
-        self._extract_features(frame1_idx)
-        self._extract_features(frame2_idx)
+        self._extract_single_frame(frame1_idx)
+        self._extract_single_frame(frame2_idx)
         print("[Reconstructor]: initial feature extracted!")
 
         # 4. 匹配初始化帧对的特征并评估模型情况
-        matrix, F_inlier_matches, model_type = self._match_2d_pair(frame1_idx, frame2_idx)
+        _, inlier_matches,_ ,model_type, _, _ = self._match_2d_pair(frame1_idx, frame2_idx)
         if model_type != "F":
             raise ValueError(f"[Reconstructor]: model type is not general 3D")
         print(f"[Reconstructor]: inital feature matched and vertificated by GRIC, model is {model_type}")
 
         # 5. 根据本质矩阵分解注册最初的两帧
-        D_inlier_matches = self._register_initial_frames(frame1_idx, frame2_idx, F_inlier_matches)
+        D_inlier_matches = self._register_initial_frames(frame1_idx, frame2_idx, inlier_matches)
         print(f"[Reconstructor]: get {len(D_inlier_matches)} D_matches!")
 
         # 6. 根据D_inlier进行三角化，并使用几何审核得到注册点候选
@@ -119,18 +118,18 @@ class Reconstructor:
         print(f"[Reconstructor] Processing Frame {new_frame_idx} (ref: {last_frame_idx})...")
 
         # 2. 提取新帧特征
-        self._extract_features(new_frame_idx)
+        self._extract_single_frame(new_frame_idx)
 
         # 3. 与上一帧进行 2D 匹配
         # matrix 在这里可能是 F 或 H，在 PnP 流程中我们主要关注 F_inlier_matches
-        _, F_inlier_matches, model_type = self._match_2d_pair(last_frame_idx, new_frame_idx)
+        _, inlier_matches,_ ,model_type, _, _ = self._match_2d_pair(last_frame_idx, new_frame_idx)
         if model_type != "F":
             raise ValueError(f"[Reconstructor]: model type is not general 3D")
 
         # 4. 寻找 2D-3D 对应关系
         # 这一步是关键：找出新帧中哪些特征点对应的 3D 点已经在地图中了
         pts_3d, pts_2d, pts_3d_ids, pts_2d_ids = self._find_2d_3d_correspondences(
-            last_frame_idx, new_frame_idx, F_inlier_matches
+            last_frame_idx, new_frame_idx, inlier_matches
         )
 
         if len(pts_3d) < 7: # PnP 至少需要 4-6 对点，这里设 7 对保证 RANSAC 鲁棒性
@@ -147,25 +146,46 @@ class Reconstructor:
 
         # 6. 三角化新点 (Map Expansion)
         # 上一步 PnP 只处理了已有的点，这一步将匹配对中“还没成点”的部分转为 3D
-        candidates = self._triangulate_between_frames(last_frame_idx, new_frame_idx, F_inlier_matches)
+        candidates = self._triangulate_between_frames(last_frame_idx, new_frame_idx, inlier_matches)
 
         # 7. 注册新生成的地图点并建立观测关系
         new_points_count = self._register_tri_candidates(last_frame_idx, new_frame_idx, candidates)
         print(f"[Reconstructor] Frame {new_frame_idx} registered. Added {new_points_count} new points.")
         return True 
+    # -------顶层运行层(unordered)-------
+
+    # -------任务编排层(unordered)-------
+    def init_worldmap_and_viewgraph(self, frame_dir):
+
+        self.map.load_frame_dir(frame_dir)
+
+        self._extract_all_frames()
+
+        self._build_view_graph()
+    
+    def init_pose(self):
+        pass
+
+    def add_next_frame(self):
+        pass
 
     # -------内部逻辑层-------
+    def _extract_all_frames(self):
+        """extract all frames' features
+        """
+        frames = list(self.map.all_frames())
+        if not frames:
+            raise ValueError(f"[Reconstructor]: extract all frames failed, world map has no frame!")
+        for frame in frames:
+            self.matcher.extract(frame)
 
-    def _extract_features(self, frame_idx):
+    def _extract_single_frame(self, frame_idx):
         """ extract features from frame_idx
-
         Args:
             frame_idx (int)
         """
-
         frame = self.map.get_frame(frame_idx)
-        if len(frame.kps) < 1 : 
-            self.matcher.extract(frame)
+        self.matcher.extract(frame)
 
     def _match_2d_pair(self, frame1_idx, frame2_idx):
         """ match features of frame1 and frame2 
@@ -182,10 +202,24 @@ class Reconstructor:
 
         frame1 = self.map.get_frame(frame1_idx)
         frame2 = self.map.get_frame(frame2_idx)
-        matrix, F_inlier_matches, model_type = self.matcher.match_2d_pair(frame1, frame2)
+        matrix, inlier_matches, inlier_ratio, model_type, gric_f, gric_h = self.matcher.match_2d_pair(frame1, frame2)
 
-        return matrix, F_inlier_matches, model_type
+        return matrix, inlier_matches, inlier_ratio, model_type, gric_f, gric_h
+    
+    def _build_view_graph(self):
+        
+        frames = list(self.map.all_frames())
+        for i in range(len(frames)):
+            for j in range(i+1,len(frames)):
+                try:
+                    _, inlier_matches, inlier_ratio, model_type, gric_f, gric_h = self.matcher.match_2d_pair(frames[i], frames[j])
+                    self.map.add_view_graph_edge(frames[i].idx, frames[j].idx, 
+                                                 inlier_matches, inlier_ratio, 
+                                                 model_type, gric_f, gric_h)
+                except InsufficientMatchesError:
+                    continue
 
+                
     def _register_initial_frames(self, frame1_idx:int, frame2_idx:int, F_inlier_matches:list[cv2.DMatch]):
         """ compute inital pose, register inital frames and return D_inlier
 
@@ -208,7 +242,7 @@ class Reconstructor:
         retval, R, t, mask_Depth = cv2.recoverPose(E, pts1, pts2, cameraMatrix=frame1.camera.K, mask = mask_E)
 
         if not retval:
-            raise ValueError(f"[Reconstruct] compute essential matrix failed!")
+            raise ValueError(f"[Reconstruct]: compute essential matrix failed!")
 
         I_R = np.eye(3)
         I_t = np.zeros((3, 1))
@@ -248,7 +282,7 @@ class Reconstructor:
 
         tri_matches = []
 
-        # 筛选 
+        # 筛选三角化匹配点
         # 两帧的两个特征 均关联 mappoint 无事发生（point_id 不同可能需要合并）
         # 两帧的一个特征 关联 mappoint   另外帧的特征添加关联
         # 两帧均无关联 mappoint         三角化候选点
@@ -274,32 +308,53 @@ class Reconstructor:
 
         points4d = cv2.triangulatePoints(P1, P2, pts1, pts2)
 
-        if points4d is not None:
+        if points4d is None:
+            raise TriangulateError(f"[reconstructor]: triangulation bewteen frame {frame1_idx} and {frame2_idx} failed")
 
-            xyz = points4d[:3, :] #[3, N]
-            w = points4d[3:, :]   #[1, N]
-            points_normalized = (xyz / w).T #归一化并转置 [N, 3]
+        xyz = points4d[:3, :] #[3, N]
+        w = points4d[3:, :]   #[1, N]
+        points_normalized = (xyz / w).T #归一化并转置 [N, 3]
 
-            candidates = []
-            for i, coords in enumerate(points_normalized):
-
-                # 这里可能要加几何审核
-                # 深度检测/重投影误差检测/视差角检测
-
-                match = tri_matches[i]
-                f1_feat_idx = match.queryIdx
-                f2_feat_idx = match.trainIdx
-
-                # 获取颜色
-                u, v = map(int, frame1.kps[f1_feat_idx].pt) #
-                bgr = frame1.get_color(u,v) 
-                rgb = bgr[::-1] / 255.0
-
-                new_point = self.map.create_point(coords,color=rgb)
-                candidates.append((new_point, f1_feat_idx, f2_feat_idx))    
-        else:
-            raise TriangulateError(f"[Reconstructor] points4D is None!")
         
+        o1 = frame1.get_center().flatten()
+        o2 = frame2.get_center().flatten()
+        R1, t1 = frame1.R, frame1.t 
+        R2, t2 = frame2.R, frame2.t
+        MIN_PARALLAX_DEG = 1.0
+        max_cos_threshold = np.cos(np.deg2rad(MIN_PARALLAX_DEG))
+
+        candidates = []
+        for i, x in enumerate(points_normalized):
+
+            # 深度检测 
+            p_c1 = R1 @ x.reshape(3,1) + t1
+            p_c2 = R2 @ x.reshape(3,1) + t2
+            if p_c1[2] <= 0 or p_c2[2] <= 0:
+                continue
+
+            # 视差角检测 
+            o1x = x - o1
+            o2x = x - o2
+            norm_o1x = np.linalg.norm(o1x)
+            norm_o2x = np.linalg.norm(o2x)
+            if norm_o1x < 1e-6 or norm_o2x < 1e-6:
+                continue
+            cos_theta = np.dot(o1x, o2x) / (norm_o1x * norm_o2x)
+            if cos_theta > max_cos_threshold:
+                continue
+
+            match = tri_matches[i]
+            f1_feat_idx = match.queryIdx
+            f2_feat_idx = match.trainIdx
+
+            # 获取颜色
+            u, v = map(int, frame1.kps[f1_feat_idx].pt) #
+            bgr = frame1.get_color(u,v) 
+            rgb = bgr[::-1] / 255.0
+
+            new_point = self.map.create_point(x,color=rgb)
+            candidates.append((new_point, f1_feat_idx, f2_feat_idx))    
+
         return candidates
     
     def _find_2d_3d_correspondences(self, last_frame_idx: int, new_frame_idx: int, F_inlier_matches: list[cv2.DMatch]):

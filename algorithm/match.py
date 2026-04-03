@@ -149,8 +149,10 @@ class FeatureMatcher:
         for i, match in enumerate(unique_matches):
             if matches_mask[i]==1:
                 inlier_matches.append(match)
+            
+        inlier_ratio = len(inlier_matches)/len(unique_matches)
 
-        return model, inlier_matches, model_type
+        return model, inlier_matches, inlier_ratio, model_type, GRIC_F, GRIC_H
 
     def calculate_GRIC(self, residuals, N, model_type):
         """
