@@ -57,28 +57,27 @@ class FeatureMatcher:
         if len(f1.des) < 8 or len(f2.des) < 8:
             raise InsufficientMatchesError("[match] the number of matching points error, none or less than 8")
         
-        # 1. knn match
+        # 1. knn 匹配
         raw_matches = self.matcher.knnMatch(f1.des, f2.des, k=2)
 
-        # 2. lowe's ratio test
+        # 2. lowe比率测试，滤除自相似的纹理
         ratio_matches = []
         for m, n in raw_matches:
             if m.distance< 0.75*n.distance:
                 ratio_matches.append(m)
 
-        # 3. bijection filter (lowe's ratio test don't promise bijection)
+        # 3. 双射过滤，避免多对一匹配情况 (A->B，C->B)
         ratio_matches.sort(key=lambda x: x.distance)
         unique_matches = []
         used_q = set()
         used_t = set()
-        
         for m in ratio_matches:
             if m.queryIdx not in used_q and m.trainIdx not in used_t:
                 unique_matches.append(m)
                 used_q.add(m.queryIdx)
                 used_t.add(m.trainIdx)
 
-        # 4. RANSAC geometry verification 
+        # 4. 对极几何验证 
         # 提取匹配点对，并转换为[N,1,2]的numpy格式
         pts1 = np.float32([f1.kps[m.queryIdx].pt for m in unique_matches]).reshape(-1, 1, 2)
         pts2 = np.float32([f2.kps[m.trainIdx].pt for m in unique_matches]).reshape(-1, 1, 2)

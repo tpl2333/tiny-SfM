@@ -5,7 +5,7 @@ from pathlib import Path
 from model.camera import Camera
 from model.mappoint import Point
 from model.frame import Frame
-from model.edge import EdgeData
+from model.viewgraph import EdgeData
 
 class Map:
 
@@ -24,6 +24,7 @@ class Map:
         self._view_graph = {}
 
     # -------帧的创建与加载-------
+
     def create_frame(self, img_path):
         
         frame = Frame(img_path, self._camera)
@@ -69,6 +70,7 @@ class Map:
 
 
     # -------帧与地图点的注册、观测与检索------- 
+
     def register_frame(self, frame_idx, R, t):
 
         if frame_idx not in self._frames:
@@ -121,3 +123,6 @@ class Map:
     def all_frames(self):
         for fid in self._frames.keys():
             yield self._frames[fid]
+    
+    def get_next_best_frame(self):
+        pass

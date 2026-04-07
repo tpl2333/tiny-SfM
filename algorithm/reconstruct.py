@@ -162,6 +162,8 @@ class Reconstructor:
         self._extract_all_frames()
 
         self._build_view_graph()
+
+        self._get
     
     def init_pose(self):
         pass
