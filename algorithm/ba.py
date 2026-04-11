@@ -7,7 +7,7 @@ from scipy.sparse import lil_matrix
 from model.camera import Camera
 from model.frame import Frame
 from model.mappoint import Point
-from model.worldmap import Map
+from management.worldmap import Map
 
 
 class BA:

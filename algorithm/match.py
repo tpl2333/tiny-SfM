@@ -1,8 +1,13 @@
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
+import logging
+logger = logging.getLogger(__name__)
+from tqdm import tqdm
 
 from model.frame import Frame
+from model.edge import EdgeData
+from management.viewgraph import ViewGraph
 from algorithm.errors import *
 
 class FeatureMatcher:
@@ -29,31 +34,46 @@ class FeatureMatcher:
         else:
             print("[matching] Matcher selection error! Defaulting to BFMatcher")
             self.matcher = cv2.BFMatcher(norm_type, crossCheck=False)
-
+    
+    # --------- 核心方法 ---------
     def extract(self, frame:Frame):
         """
-        提取函数：
+        提取特征方法：
         1. 检查 Frame 是否已有特征点（避免重复计算）
         2. 如果没有，计算并存入 Frame
-
-            kp与des的结构见cv2_anno.txt第一条
         """
         grayimg = cv2.cvtColor(frame._img, cv2.COLOR_BGR2GRAY)
         if len(frame.kps) < 1:
             kps, des = self.extractor.detectAndCompute(grayimg, None)
             frame.set_feature(kps, des)
 
+    def extract_all(self, frames:list[Frame]):
+        """
+        批量提取特征
+        """
+        if not frames:
+            return False
+        
+        for f in frames:
+            self.extract(f)
+
     
     def match_2d_pair(self, f1:Frame, f2:Frame):
-        """
-        两帧之间特征点的匹配
+        """        
+        两帧之间特征点的匹配与几何验证
         frame1, frame2: 匹配的两帧
 
-        return:            
-            F/H: 基本或单应矩阵
-            inlier_matches: 内点匹配点
-            model_type: "F" or "H"
+        Args:
+            f1 (Frame): query_frame
+            f2 (Frame): train_frame
+
+        Raises:
+            InsufficientMatchesError: 错误：没有足够匹配点
+
+        Returns:
+            model, inlier_matches, inlier_ratio, model_type, GRIC_F, GRIC_H
         """
+
         if len(f1.des) < 8 or len(f2.des) < 8:
             raise InsufficientMatchesError("[match] the number of matching points error, none or less than 8")
         
@@ -128,12 +148,12 @@ class FeatureMatcher:
         inliers_H_num = np.sum(mask_H)
         inliers_F_num = np.sum(mask_F)
         
-        ratio = inliers_H_num / (inliers_F_num + 1e-8)
+        HF_ratio = inliers_H_num / (inliers_F_num + 1e-8)
         
         print(f"GRIC_H: {GRIC_H:.2f}, GRIC_F: {GRIC_F:.2f}")
-        print(f"Inliers H: {inliers_H_num}, Inliers F: {inliers_F_num}, Ratio: {ratio:.2f}")
+        print(f"Inliers H: {inliers_H_num}, Inliers F: {inliers_F_num}, Ratio: {HF_ratio:.2f}")
 
-        if GRIC_H < GRIC_F or ratio > 0.8: 
+        if GRIC_H < GRIC_F or HF_ratio > 0.8: 
             print("Select H (Planar/Rotation)")
             matches_mask = mask_H.ravel().tolist()
             model = H
@@ -162,7 +182,7 @@ class FeatureMatcher:
         return:
             GRIC_score: 越高解释性越不好
         """
-        
+       
         # 设定常数
         # 这里的 lambda 对应公式中的惩罚系数
         # lambda_1 * d * N + lambda_2 * k
@@ -190,6 +210,35 @@ class FeatureMatcher:
         gric = sum_residuals + lambda_1 * d * N + lambda_2 * k
         
         return gric
+
+    # --------- 外部调用层 ---------    
+    def match_exhaustive(self, frames:list[Frame], viewgraph:ViewGraph):
+        """
+        执行全图暴力匹配并填充 ViewGraph
+        """
+        n = len(frames)
+
+        total_pairs = n * (n - 1) // 2
+        logger.info(f"开始暴力匹配，共计 {total_pairs} 对图像...")
+
+        with tqdm(total=total_pairs, desc="Pairwise Matching") as pbar:
+            for i in range(n):
+                for j in range(i + 1, n):
+                    f1, f2 = frames[i], frames[j]
+                    
+                    try:
+                        _, matches, ratio, m_type, g_f, g_h = self.match_2d_pair(f1, f2)
+                    
+                        edge = EdgeData(matches, ratio, m_type, g_f, g_h)
+                        viewgraph.add_edge(f1.idx, f2.idx, edge)
+
+                        logger.debug(f"Edge ({f1.idx}, {f2.idx}) added: {len(matches)} inliers.")
+                    
+                    except InsufficientMatchesError:
+
+                        logger.debug(f"Edge ({f1.idx}, {f2.idx}) failed: insufficient matches.")
+                    
+                    pbar.update(1)
  
 
 

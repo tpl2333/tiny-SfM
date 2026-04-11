@@ -6,7 +6,7 @@ from pathlib import Path
 
 # 导入你定义的模块
 from model.camera import Camera, CameraSource
-from model.worldmap import Map
+from management.worldmap import Map
 from algorithm.match import FeatureMatcher
 from algorithm.reconstruct import Reconstructor
 

@@ -3,7 +3,7 @@ import numpy as np
 import open3d as o3d
 from algorithm.match import FeatureMatcher
 from algorithm.errors import *
-from model.worldmap import Map
+from management.worldmap import Map
 
 class Reconstructor:
     def __init__(self, worldmap:Map, matcher:FeatureMatcher, frame_dir):
@@ -350,7 +350,7 @@ class Reconstructor:
             f2_feat_idx = match.trainIdx
 
             # 获取颜色
-            u, v = map(int, frame1.kps[f1_feat_idx].pt) #
+            u, v = map(int, frame1.kps[f1_feat_idx].pt) 
             bgr = frame1.get_color(u,v) 
             rgb = bgr[::-1] / 255.0
 
