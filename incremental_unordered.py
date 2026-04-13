@@ -10,6 +10,7 @@ from management.worldmap import Map
 from algorithm.match import FeatureMatcher
 from algorithm.datamine import DataMiner
 from algorithm.mvgsolver import MvgSolver
+from algorithm.ba_ceres import BundleAdjuster
 from algorithm.errors import *
 
 class Reconstructor:
@@ -23,9 +24,11 @@ class Reconstructor:
         self.matcher = FeatureMatcher()
         self.dataminer = DataMiner()
         self.mvgsolver = MvgSolver()
+        self.ba = BundleAdjuster(self.worldmap, self.trackmanager)
 
         # 1. 初始化 Worldmap，加载图像
         self.worldmap.load_frame_dir(img_dir)
+        track_length_threshold = self.determine_track_threshold()
 
         # 2. 对所有图像进行特征点提取
         frames = list(self.worldmap.all_frames())
@@ -35,9 +38,21 @@ class Reconstructor:
         self.matcher.match_exhaustive(frames, self.viewgraph)
 
         # 4. 通过viewgraph初始化特征轨迹
-        self.trackmanager.build_from_viewgraph(self.viewgraph)
+        threshold = self.determine_track_threshold()
+        self.trackmanager.build_from_viewgraph(self.viewgraph, threshold)
 
         logger.info(f"初始化成功")
+
+        self.canonical_f_idx = None
+
+    def determine_track_threshold(self):
+        num_frames = len(self.worldmap._frames)
+        if num_frames < 6:
+            return 2
+        elif num_frames < 15:
+            return 3
+        else:
+            return 4
     
     def run(self):
         # 1. 初始化
@@ -52,8 +67,10 @@ class Reconstructor:
         edge = self.viewgraph.get_edge(frame1_idx, frame2_idx)
 
         R, t, D_inlier_matches = self.mvgsolver.get_initial_pose(frame1, frame2, edge)
+        logger.info(f"经过本质矩阵与深度检测，初始化帧对产生了 {len(D_inlier_matches)} 个三角化匹配点")
 
         # 1.3 注册初始帧
+        self.canonical_f_idx = frame1_idx
         self.worldmap.register_frame(frame1_idx)
         self.worldmap.register_frame(frame2_idx, R, t)
 
@@ -105,9 +122,14 @@ class Reconstructor:
                 # 1. 直接从 ViewGraph 拿现成的匹配关系
                 edge = self.viewgraph.get_edge(next_frame_idx, rb_idx)
                 if edge is None: continue
+
+                if next_frame_idx > rb_idx:
+                    matches_aligned = edge.matches[:, [1, 0]] 
+                else:
+                    matches_aligned = edge.matches
                 
                 # 2. 过滤所有匹配中还未三角化的点
-                _, _, tri_tracks, tri_matches = self.trackmanager.classify_matches(next_frame_idx, rb_idx, edge.matches)
+                _, _, tri_tracks, tri_matches = self.trackmanager.classify_matches(next_frame_idx, rb_idx, matches_aligned)
                 
                 if len(tri_matches) == 0: continue
                 
@@ -128,15 +150,11 @@ class Reconstructor:
             # 2.4 可能的局部ba
 
 
+        # 3 最后的全局ba
+        logger.info(f"开始全局光束法平差")
+        self.ba.run_global_ba(self.canonical_f_idx)
+
             
-
-
-
-
-
-
-
-
 import numpy as np
 import open3d as o3d
 import logging
@@ -192,7 +210,7 @@ def visualize_reconstruction(reconstructor):
     # 3. 启动可视化窗口
     logger.info(f"正在显示地图: {len(points_3d)} 个点, {len(geometries)-1} 个注册相机")
     o3d.visualization.draw_geometries(geometries, 
-                                    window_name="SfM 重建结果 - 初始化阶段",
+                                    window_name="SfM 重建结果",
                                     width=1280, height=720,
                                     left=50, top=50,
                                     mesh_show_back_face=True)

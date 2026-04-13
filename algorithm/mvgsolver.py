@@ -60,12 +60,16 @@ class MvgSolver:
         Returns:
             point_info (list[tuple]): [(track_idx, position3d, color)]
         """
+        tri_matches = np.atleast_2d(tri_matches)
+        if frame1.idx == 21:
+            print(f"DEBUG: {frame1.idx}-{frame2.idx} 匹配数: {tri_matches.shape}")
+
         if len(tri_matches) == 0:
             return []
 
         P1 = frame1.get_proj_matrix()
         P2 = frame2.get_proj_matrix()
-            
+       
         pts1 = np.float32([frame1.kps[m].pt for m in tri_matches[:,0]]).reshape(-1, 2).T
         pts2 = np.float32([frame2.kps[m].pt for m in tri_matches[:,1]]).reshape(-1, 2).T
 

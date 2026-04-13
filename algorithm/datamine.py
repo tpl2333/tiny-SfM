@@ -62,7 +62,7 @@ class DataMiner:
             num_features = len(frame_obj.kps)
             
             for feat_idx in range(num_features):
-                track = trackmanager.get_track(un_idx, feat_idx)
+                track = trackmanager.get_track_from_feat(un_idx, feat_idx)
                 if track and track.is_triangulated:
                     corr_count += 1
             
@@ -76,7 +76,7 @@ class DataMiner:
         # 阈值检查：如果最多的也只有不到 30 个点，建议停止重建或报错
         if best_frame_idx is None:
             logger.info(f"没有选定下一个候选帧")
-        if max_correspondences < 30:
+        elif max_correspondences < 15:
             logger.warning(f"候选帧 {best_frame_idx} 中最大关联数仅为 {max_correspondences}，重建质量可能下降")
 
         return best_frame_idx, max_correspondences

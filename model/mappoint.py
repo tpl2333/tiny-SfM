@@ -27,6 +27,9 @@ class Point:
     def color(self):
         return self._color
     
+    def set_position3d(self, pts3d):
+        self._position3d = pts3d
+    
     # def add_observation(self, frame_idx, feature_idx):
     #     """
     #     建立该 3D 地图点 与 图像帧与帧中的特征 2D 像素点的关联映射。

@@ -52,7 +52,7 @@ class TrackManager:
             self._parent[root1] = root2
 
     # ---------初始化方法---------
-    def build_from_viewgraph(self, viewgraph:ViewGraph):
+    def build_from_viewgraph(self, viewgraph:ViewGraph, threshold = 2):
         """
         从 ViewGraph 中提取所有 EdgeData，串联成 Tracks
         """
@@ -83,7 +83,7 @@ class TrackManager:
 
         for root, obs_list in groups.items():
             # 孤立点不构成轨迹
-            if len(obs_list) < 2:
+            if len(obs_list) < threshold:
                 continue 
             # 冲突检查：同一个轨迹在同一帧内不能有多个点
             if self._has_conflict(obs_list):
@@ -108,8 +108,11 @@ class TrackManager:
         return len(frame_ids) != len(set(frame_ids))
     
     # ---------轨迹的查询，分类与状态更改---------
-    def get_track(self, frame_idx:int, feat_idx:int)->FeatureTrack:
+    def get_track_from_feat(self, frame_idx:int, feat_idx:int)->FeatureTrack:
         track_idx = self._feat_to_track.get((frame_idx, feat_idx))
+        return self._tracks.get(track_idx)
+    
+    def get_track_from_idx(self, track_idx:int)->FeatureTrack:
         return self._tracks.get(track_idx)
     
     def classify_matches(self, frame1_idx, frame2_idx, inlier_matches=None):
@@ -132,7 +135,7 @@ class TrackManager:
 
         for m in inlier_matches:
 
-            track = self.get_track(frame1_idx, m[0])
+            track = self.get_track_from_feat(frame1_idx, m[0])
             
             if track is None:
                 continue
@@ -146,8 +149,8 @@ class TrackManager:
                 tri_tracks.append(track.idx)
                 tri_matches.append(m)
 
-        obs_matches = np.array(obs_matches, dtype=np.int32)
-        tri_matches = np.array(tri_matches, dtype=np.int32)
+        obs_matches = np.array(obs_matches, dtype=np.int32).reshape(-1, 2)
+        tri_matches = np.array(tri_matches, dtype=np.int32).reshape(-1, 2)
 
         return obs_tracks, obs_matches, tri_tracks, tri_matches
     
