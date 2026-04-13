@@ -1,8 +1,13 @@
 import numpy as np
+import logging
+logger = logging.getLogger(__name__)
+
+from management.viewgraph import ViewGraph
+
 
 class FeatureTrack:
     def __init__(self, track_idx):
-        self.track_idx = track_idx 
+        self.idx = track_idx 
         # 观测列表: [(frame_idx, feature_idx), ...]
         self.observations = []       
         # 关联的 3D 地图点 ID，None 表示无关联
@@ -47,14 +52,14 @@ class TrackManager:
             self._parent[root1] = root2
 
     # ---------初始化方法---------
-    def build_from_viewgraph(self, view_graph):
+    def build_from_viewgraph(self, viewgraph:ViewGraph):
         """
         从 ViewGraph 中提取所有 EdgeData，串联成 Tracks
         """
         print("[TrackManager] 正在构建全局特征轨迹...")
         
         # 1. 遍历 ViewGraph 中所有的边
-        for idx1, idx2, edge_data in view_graph.get_all_edges():
+        for idx1, idx2, edge_data in viewgraph.get_all_edges():
             for m in edge_data.matches:
                 node1 = (idx1, m[0]) # (query_frame_idx, query_feat_idx)
                 node2 = (idx2, m[1]) # (train_frame_idx, train_feat_idx)
@@ -103,10 +108,22 @@ class TrackManager:
         return len(frame_ids) != len(set(frame_ids))
     
     # ---------轨迹的查询，分类与状态更改---------
-    def get_track_idx(self, frame_idx:int, feat_idx:int):
-        return self._feat_to_track.get((frame_idx, feat_idx))
+    def get_track(self, frame_idx:int, feat_idx:int)->FeatureTrack:
+        track_idx = self._feat_to_track.get((frame_idx, feat_idx))
+        return self._tracks.get(track_idx)
     
-    def classify_matches(self, frame_idx1, frame_idx2, inlier_matches):
+    def classify_matches(self, frame1_idx, frame2_idx, inlier_matches=None):
+        """ 
+        筛选出匹配对所属轨迹中未三角化的匹配对，避免重复三角化
+
+        Args:
+            frame1_idx (_type_): _description_
+            frame2_idx (_type_): _description_
+            inlier_matches (_type_, optional): _description_. Defaults to None.
+
+        Returns:
+            _type_: _description_
+        """
 
         obs_tracks = []
         tri_tracks = []
@@ -115,19 +132,18 @@ class TrackManager:
 
         for m in inlier_matches:
 
-            track_idx = self.get_track_idx(frame_idx1, m[0])
-            track = self._tracks.get(track_idx)
+            track = self.get_track(frame1_idx, m[0])
             
             if track is None:
                 continue
                 
             if track.is_triangulated:
                 # 状态 A: 该轨迹已经有了地图点，无需重复添加观测。
-                obs_tracks.append(track_idx)
+                obs_tracks.append(track.idx)
                 obs_matches.append(m)
             else:
                 # 状态 B: 该轨迹还没有地图点，这是三角化的黄金机会。
-                tri_tracks.append(track_idx)
+                tri_tracks.append(track.idx)
                 tri_matches.append(m)
 
         obs_matches = np.array(obs_matches, dtype=np.int32)
@@ -135,7 +151,36 @@ class TrackManager:
 
         return obs_tracks, obs_matches, tri_tracks, tri_matches
     
-    def update_track_status(self, point_info: list, point_indices: list):
+    def get_2d_3d_pairs(self, frame_idx):
+        """        
+        获取某一帧中所有具有对应 3D 地图点的特征索引。
+        用于 PnP 位姿解算。
+
+        Args:
+            frame_idx (int): 帧索引
+
+        Returns:
+            feature_indices: List[int] 该帧特征点的索引
+            mappoint_indices: List[int] 对应的 3D 地图点 ID
+        """
+        feat_indices = []
+        pt_indices = []
+
+        # 1. 遍历该帧在 trackmanager 记录中的所有特征点
+        for (f_idx, k_idx), track_idx in self._feat_to_track.items():
+            if f_idx != frame_idx:
+                continue
+                
+            track = self._tracks.get(track_idx)
+            
+            # 2. 如果该轨迹已经三角化了，这就是一个 PnP 约束！
+            if track and track.is_triangulated:
+                feat_indices.append(k_idx)
+                pt_indices.append(track.mappoint_idx)
+
+        return feat_indices, pt_indices
+    
+    def update_track_state(self, point_info: list, point_indices: list):
         """
         将地图生成的 point_idx 绑定回对应的 FeatureTrack
         point_info: [(track_idx, x, color), ...]
@@ -147,7 +192,7 @@ class TrackManager:
             track = self._tracks.get(track_idx)
             
             if track:
-                track.connect_mappoint(p_idx) # 完美衔接
+                track.connect_mappoint(p_idx)
             else:
-                print(f"Track {track_idx} not found during status update!")
+                logger.error(f"Track {track_idx} not found during status update!")
 

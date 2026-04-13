@@ -1,4 +1,7 @@
 import numpy as np
+import logging
+logger = logging.getLogger(__name__)
+
 
 from model.edge import EdgeData
 
@@ -34,9 +37,6 @@ class ViewGraph:
         u, v = (frame_idx1, frame_idx2) if frame_idx1 < frame_idx2 else (frame_idx2, frame_idx1)
         return self._edges.get((u,v))
 
-    # ---------图的状态更新方法---------
-    def register_frame(self, frame_id):
 
-        self._registered_edges.add(frame_id)
 
 

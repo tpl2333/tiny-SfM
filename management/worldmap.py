@@ -1,6 +1,9 @@
 import cv2
 import numpy as np
 from pathlib import Path
+import logging
+logger = logging.getLogger(__name__)
+
 
 from model.camera import Camera
 from model.mappoint import Point
@@ -21,11 +24,16 @@ class Map:
 
         # registered_idx = set(registered_frame.idx)
         self._registered_ids = set()
+        # 
+        self._failed_ids = set()
 
         # -----帧与点的id初始化-----
         self._frame_count = 0
         self._point_count = 0
 
+    # -------相机相关方法-------
+    def get_intrisics(self):
+        return self._camera.K
 
     # -------帧相关方法-------
     def add_frame(self, img_path):
@@ -45,30 +53,46 @@ class Map:
         except FileNotFoundError as e:
             print(f"[Map] Frame Directory Not Found!:{e}")
 
+        logger.info(f"共有 {len(self._frames)} 张图像加载成功")
+
     def register_frame(self, frame_idx, R = np.eye(3), t = np.zeros((3, 1))):
 
         if frame_idx not in self._frames:
+            logger.error(f"[Map] Frame ID {frame_idx} not in Map")
             raise KeyError(f"[Map] Frame ID {frame_idx} not in Map")
         if frame_idx in self._registered_ids:
-            print(f"[Map: Warning] Frame {frame_idx} has already registered, update the pose")
+            logger.warning(f"Frame {frame_idx} has already registered, update the pose")
 
         frame = self._frames[frame_idx]
         frame.set_pose(R, t)
         self._registered_ids.add(frame.idx)
-        frame.is_registered = True    
+        frame.is_registered = True
+
+    def add_failed_frame(self, frame_idx):
+        self._failed_ids.add(frame_idx)
+        logger.warning(f"帧 {frame_idx} 被标记为失败状态")    
 
     @property
-    def unregistered_frames(self):
-        # unregistered_frames = List[unregistered_frame.idx]
-        return [fid for fid in self._frames if fid not in self._registered_ids]
+    def unregistered_frame_set(self):
+        # unregistered_frames = set(List[unregistered_frame.idx])
+        return set([fid for fid in self._frames if (fid not in self._registered_ids) and (fid not in self._failed_ids)])
     
-    def get_frame(self, frame_idx):
+    @property
+    def registered_frame_set(self):
+        # registered_frames = set(registered_frame.idx)
+        return self._registered_ids
+    
+    @property
+    def failed_frame_set(self):
+        # failed_frames = set(failed_frame.idx)
+        return self._failed_ids
+    
+    def get_frame(self, frame_idx)->Frame:
         return self._frames.get(frame_idx)
     
     def all_frames(self):
         for fid in self._frames.keys():
             yield self._frames[fid]
-
 
     # -------地图点相关方法------- 
     def create_point(self, track_idx, position3d, color=None):
@@ -97,7 +121,7 @@ class Map:
         
         return point_indice
     
-    def get_point(self, point_idx):
+    def get_point(self, point_idx)->Point:
         return self._points.get(point_idx)
 
 

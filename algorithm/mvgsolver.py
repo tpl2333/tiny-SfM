@@ -1,5 +1,7 @@
 import cv2
 import numpy as np
+import logging
+logger = logging.getLogger(__name__)
 
 from model.frame import Frame
 from model.edge import EdgeData
@@ -115,3 +117,58 @@ class MvgSolver:
             point_info.append((track_idx, x, rgb ))    
 
         return point_info
+    
+    def get_pose_from_pnp_iter(self, pts_2d: np.ndarray, pts_3d: np.ndarray, K):
+        """
+        通过 RANSAC PnP 计算位姿，并进行内点精炼
+        """
+        # 0. 安全检查：如果点数太少，直接放弃
+        if pts_3d.shape[0] < 4:
+            logger.error("PnP 输入点数不足 4 个，无法计算")
+            return None, None, None
+
+        # 1. 第一步：运行 RANSAC PnP 剔除外点
+        retval, rvec, tvec, inliers = cv2.solvePnPRansac(
+            pts_3d, pts_2d, K, distCoeffs=None, 
+            flags=cv2.SOLVEPNP_ITERATIVE, 
+            iterationsCount=100, 
+            reprojectionError=8.0, 
+            confidence=0.99
+        )
+
+        # 2. 失败判断与门槛检查
+        if not retval or inliers is None:
+            logger.error("PnP RANSAC 计算失败！")
+            return None, None, None
+
+        num_inliers = len(inliers)
+        inlier_ratio = num_inliers / pts_3d.shape[0]
+        
+        # 增加最小内点数门槛（比如至少 15-20 个点才认为注册有效）
+        if num_inliers < 15:
+            logger.warning(f"PnP 内点数过少 ({num_inliers})，放弃该帧注册")
+            return None, None, None
+
+        if inlier_ratio < 0.3: 
+            logger.warning(f"PnP 内点比例过低 ({inlier_ratio:.2f})")
+
+        # 3. 第二步：位姿精炼 (Refinement)
+        inlier_idx = inliers.flatten()
+        pts_3d_inliers = pts_3d[inlier_idx]
+        pts_2d_inliers = pts_2d[inlier_idx]
+
+        # 使用第一步的 rvec, tvec 作为初值进行优化
+        success, rvec_refined, tvec_refined = cv2.solvePnP(
+            pts_3d_inliers, pts_2d_inliers, K, distCoeffs=None,
+            rvec=rvec, tvec=tvec, 
+            useExtrinsicGuess=True, 
+            flags=cv2.SOLVEPNP_ITERATIVE
+        )
+
+        if success:
+            R, _ = cv2.Rodrigues(rvec_refined)
+            return R, tvec_refined, inliers
+        else:
+            # 如果精炼失败，至少返回 RANSAC 的结果
+            R, _ = cv2.Rodrigues(rvec)
+            return R, tvec, inliers

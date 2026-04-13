@@ -62,12 +62,76 @@ class Reconstructor:
         point_info = self.mvgsolver.triangulate(frame1, frame2, tri_tracks, tri_matches)
 
         point_indice = self.worldmap.create_points_from_info(point_info)
-        self.trackmanager.update_track_status(point_info, point_indice)
+        self.trackmanager.update_track_state(point_info, point_indice)
         # 1.5 可能的初始化ba
 
-        
 
         # 2. 增量式重建
+        while True:
+
+            # 2.1 挑选下一帧
+            next_frame_idx, count = self.dataminer.find_next_best_frame(self.worldmap, self.viewgraph, self.trackmanager)
+            
+            if next_frame_idx is None or count < 30:
+                logger.info("没有合适的候选帧或所有帧已注册，重建结束。")
+                break
+                
+            logger.info(f" 下一个目标: 帧{next_frame_idx} (拥有 {count} 个 2D-3D 对应)")
+
+            # 2.2 PnP 解算该帧的位姿并注册
+            next_frame = self.worldmap.get_frame(next_frame_idx)
+            feat_ids, pt_ids = self.trackmanager.get_2d_3d_pairs(next_frame_idx)
+
+            pts_2d = np.float32([next_frame.kps[i].pt for i in feat_ids])
+            pts_3d = np.float32([self.worldmap.get_point(i).position3d for i in pt_ids])
+            K = self.worldmap.get_intrisics()
+
+            R, t, _ = self.mvgsolver.get_pose_from_pnp_iter(pts_2d, pts_3d, K)
+
+            if R is None:
+                self.worldmap.add_failed_frame(next_frame_idx)
+                continue
+
+            self.worldmap.register_frame(next_frame_idx, R, t)
+
+            logger.info(f" 帧{next_frame_idx} 通过 PnP 解算，获得位姿 {R} 和 {t}")
+
+            # 2.3 三角化 
+            all_neighbors = self.viewgraph.get_connected_frames(next_frame_idx)
+            registered_neighbors = all_neighbors & self.worldmap.registered_frame_set
+
+            for rb_idx in registered_neighbors:
+
+                # 1. 直接从 ViewGraph 拿现成的匹配关系
+                edge = self.viewgraph.get_edge(next_frame_idx, rb_idx)
+                if edge is None: continue
+                
+                # 2. 过滤所有匹配中还未三角化的点
+                _, _, tri_tracks, tri_matches = self.trackmanager.classify_matches(next_frame_idx, rb_idx, edge.matches)
+                
+                if len(tri_matches) == 0: continue
+                
+                # 3. 使用 MvgSolver 进行三角化 
+                # 传入新帧、邻居帧以及待三角化的匹配对
+                f_new = self.worldmap.get_frame(next_frame_idx)
+                f_nb = self.worldmap.get_frame(rb_idx)
+                
+                # point_info: [(track_idx, xyz, color), ...]
+                point_info = self.mvgsolver.triangulate(f_new, f_nb, tri_tracks, tri_matches)
+                
+                # 4. 注册新点并更新轨迹状态e
+                point_indices = self.worldmap.create_points_from_info(point_info)
+                self.trackmanager.update_track_state(point_info, point_indices)
+                
+                logger.info(f"通过帧 {next_frame_idx} 与帧 {rb_idx} 的三角化，新增了 {len(point_indices)} 个地图点")
+            
+            # 2.4 可能的局部ba
+
+
+            
+
+
+
 
 
 
