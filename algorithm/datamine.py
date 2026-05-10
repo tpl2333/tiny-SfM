@@ -1,3 +1,4 @@
+import numpy as np
 import logging
 logger = logging.getLogger(__name__)
 
@@ -8,33 +9,55 @@ from management.trackmanager import TrackManager
 
 class DataMiner:
     
-    def find_best_seed(self, viewgraph:ViewGraph):
-        """
-        从 ViewGraph 中搜索最适合作为起点的边
-        """
+    def find_best_seed(self, viewgraph: ViewGraph, worldmap: Map):
         best_score = -1
         best_pair = None
         
-        # 遍历 ViewGraph 中所有的边
         for id1, id2, edge in viewgraph.get_all_edges():
-            # 1. 基础过滤：必须是通过 F 矩阵校验的边
             if edge.model_type != 'F' or not edge.is_good:
                 continue
                 
-            # 2. 计算初始化权重分数
-            # 核心思路：内点越多越好，且 F 分数要比 H 分数优势大（代表视差足）
-            # 注意：GRIC 分数越小表示模型拟合越好
-            gric_ratio = edge.score_h / edge.score_f 
-            current_score = edge.num_inliers * gric_ratio
+            # --- 维度 1: 匹配数量 (压制相邻帧的暴利) ---
+            # 超过 100 个点后，数量带来的边际收益递减
+            num_score = np.log10(edge.num_inliers) 
             
+            # --- 维度 2: 几何质量 (GRIC 比例) ---
+            gric_ratio = edge.score_h / edge.score_f 
+            
+            # --- 维度 3: 空间分布 (新增) ---
+            frame1 = worldmap.get_frame(id1)
+            spread_score = self.calculate_spatial_spread(frame1, edge.query_indices)
+            
+            # 综合初步得分
+            current_score = num_score * gric_ratio * spread_score
+            
+            # --- 维度 4: 强制视差阈值 (只有得分领先的才跑这个，省资源) ---
+            # if current_score > threshold:
+            #     # 尝试用 mvgsolver 算一下位姿和初步视差
+            #     # 如果 median_parallax < 2.0: continue
+            #     pass
+
             if current_score > best_score:
                 best_score = current_score
                 best_pair = (id1, id2, edge)
-        
-        if best_pair is None:
-            raise RuntimeError("无法在 ViewGraph 中找到合适的初始化种子对！")
-            
+
         return best_pair
+
+    def calculate_spatial_spread(self, frame, feature_indices):
+        """ 计算内点在图像中的覆盖率 (0.0 ~ 1.0) """
+        grid_size = 8
+        grid = np.zeros((grid_size, grid_size))
+        h = frame.height
+        w = frame.weight 
+        
+        for idx in feature_indices:
+            pt = frame.kps[idx].pt
+            # 映射到网格坐标
+            gx = int(pt[0] * grid_size / w)
+            gy = int(pt[1] * grid_size / h)
+            grid[min(gy, grid_size-1), min(gx, grid_size-1)] = 1
+            
+        return np.sum(grid) / (grid_size * grid_size)
     
     def find_next_best_frame(self, worldmap:Map, viewgraph:ViewGraph, trackmanager:TrackManager):
         """

@@ -115,6 +115,13 @@ class TrackManager:
     def get_track_from_idx(self, track_idx:int)->FeatureTrack:
         return self._tracks.get(track_idx)
     
+    def reset_track_state(self, track_idx):
+
+        track = self._tracks.get(track_idx)
+        if track:
+            track.mappoint_idx = None
+            logger.debug(f"TrackManager: 轨迹 {track_idx} 已重置为未三角化状态")
+    
     def classify_matches(self, frame1_idx, frame2_idx, inlier_matches=None):
         """ 
         筛选出匹配对所属轨迹中未三角化的匹配对，避免重复三角化

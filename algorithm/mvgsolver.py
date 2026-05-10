@@ -14,6 +14,7 @@ from algorithm.errors import *
 
 class MvgSolver:
     
+    # ==================== 1. 初始化位姿解算  ====================
     def get_initial_pose(self, frame1:Frame, frame2:Frame, edge:EdgeData):
         """ 计算本质矩阵获取初始位姿
 
@@ -45,7 +46,7 @@ class MvgSolver:
 
         return R, t, D_inlier_matches
 
-    def triangulate(self, frame1:Frame, frame2:Frame, tri_tracks:list[int], tri_matches:np.ndarray):
+    def triangulate(self, frame1:Frame, frame2:Frame, tri_tracks:list[int], tri_matches:np.ndarray, K):
         """ 三角化两帧之间的对应点
 
         Args:
@@ -88,6 +89,7 @@ class MvgSolver:
         R2, t2 = frame2.R, frame2.t
         MIN_PARALLAX_DEG = 1.0
         max_cos_threshold = np.cos(np.deg2rad(MIN_PARALLAX_DEG))
+        repro_error_threshold = 2.0
 
         point_info = []
         for i, x in enumerate(points_normalized):
@@ -109,9 +111,26 @@ class MvgSolver:
             if cos_theta > max_cos_threshold:
                 continue
 
+            # 重投影检测
             match = tri_matches[i]
             track_idx = tri_tracks[i]
             f1_feat_idx = match[0]
+            f2_feat_idx = match[1]
+            
+            # 投影到相机1的像素平面
+            proj1 = K @ p_c1
+            u1_proj, v1_proj = proj1[0, 0] / proj1[2, 0], proj1[1, 0] / proj1[2, 0]
+            u1_obs, v1_obs = frame1.kps[f1_feat_idx].pt
+            err1 = np.sqrt((u1_proj - u1_obs)**2 + (v1_proj - v1_obs)**2)
+
+            # 投影到相机2的像素平面
+            proj2 = K @ p_c2
+            u2_proj, v2_proj = proj2[0, 0] / proj2[2, 0], proj2[1, 0] / proj2[2, 0]
+            u2_obs, v2_obs = frame2.kps[f2_feat_idx].pt
+            err2 = np.sqrt((u2_proj - u2_obs)**2 + (v2_proj - v2_obs)**2)
+
+            if err1 > repro_error_threshold or err2 > repro_error_threshold:
+                continue
 
             # 获取颜色
             u, v = map(int, frame1.kps[f1_feat_idx].pt) 
@@ -121,6 +140,90 @@ class MvgSolver:
             point_info.append((track_idx, x, rgb ))    
 
         return point_info
+    
+
+    # ==================== 2. 三角化的妙妙小工具  ====================
+
+    def calculate_repro_error(self, pt3d, R, t, K, pt2d):
+        """ 计算单点重投影误差和深度 """
+        # Pc = R*X + t
+        pc = R @ pt3d.reshape(3, 1) + t.reshape(3, 1)
+        depth = pc[2, 0]
+        if depth <= 1e-6:
+            return float('inf'), depth
+        
+        # 投影到像素平面
+        p_img = K @ pc
+        u, v = p_img[0, 0] / p_img[2, 0], p_img[1, 0] / p_img[2, 0]
+        error = np.linalg.norm(np.array([u, v]) - pt2d)
+        return error, depth
+
+    def calculate_parallax(self, pt3d, R1, t1, R2, t2):
+        """ 计算两个相机对该点的观测视差角 """
+        c1 = -R1.T @ t1.reshape(3, 1)
+        c2 = -R2.T @ t2.reshape(3, 1)
+        v1, v2 = pt3d.reshape(3, 1) - c1, pt3d.reshape(3, 1) - c2
+        n1, n2 = np.linalg.norm(v1), np.linalg.norm(v2)
+        if n1 < 1e-6 or n2 < 1e-6: return 0.0
+        # 向量夹角余弦公式
+        cos_theta = np.dot(v1.T, v2) / (n1 * n2)
+        return np.degrees(np.arccos(np.clip(cos_theta, -1.0, 1.0)))
+
+    # ==================== 3. 核心三角化与校验  ====================
+    def triangulate_simple(self, R1, t1, pt1, R2, t2, pt2, K):
+        """ 使用 OpenCV 快速计算两帧三角化坐标 """
+        P1 = K @ np.hstack((R1, t1.reshape(3, 1)))
+        P2 = K @ np.hstack((R2, t2.reshape(3, 1)))
+        
+        pts1_raw = np.array([pt1[0], pt1[1]], dtype=np.float32).reshape(2, 1)
+        pts2_raw = np.array([pt2[0], pt2[1]], dtype=np.float32).reshape(2, 1)
+        
+        pt4d = cv2.triangulatePoints(P1, P2, pts1_raw, pts2_raw)
+        return pt4d[:3, 0] / pt4d[3, 0]
+
+    def verify_multi_view_consensus(self, pt3d, track, worldmap, err_thresh=4.0):
+        """
+        多视图公投校验逻辑 (COLMAP 核心思路)
+        返回: (是否通过, 最大视差角, 最佳基线对位姿信息)
+        """
+        K = worldmap.get_intrisics()
+        valid_poses = []
+        
+        # 1. 投影校验 (一票否决)
+        # 遍历该轨迹中所有已注册的帧，检查这个 3D 点在大家眼里是否都对劲
+        for f_idx, feat_idx in track.observations:
+            if f_idx not in worldmap._registered_ids:
+                continue
+            
+            frame = worldmap.get_frame(f_idx)
+            pt2d = frame.kps[feat_idx].pt
+            
+            err, depth = self.calculate_repro_error(pt3d, frame.R, frame.t, K, pt2d)
+            if err > err_thresh or depth <= 0:
+                return False, 0.0, None # 只要有一帧对不上，这就是个烂点
+            
+            valid_poses.append({'R': frame.R, 't': frame.t, 'pt': pt2d, 'id': f_idx})
+
+        if len(valid_poses) < 2:
+            return False, 0.0, None
+
+        # 2. 寻找最大视差角 (确定地基是否稳固)
+        max_parallax = 0.0
+        best_pair = None
+        for i in range(len(valid_poses)):
+            for j in range(i + 1, len(valid_poses)):
+                angle = self.calculate_parallax(pt3d, valid_poses[i]['R'], valid_poses[i]['t'],
+                                               valid_poses[j]['R'], valid_poses[j]['t'])
+                if angle > max_parallax:
+                    max_parallax = angle
+                    best_pair = (valid_poses[i], valid_poses[j])
+                    
+        return True, max_parallax, best_pair
+
+
+
+
+    # ==================== 4. PnP位姿解算  ====================  
     
     def get_pose_from_pnp_iter(self, pts_2d: np.ndarray, pts_3d: np.ndarray, K):
         """

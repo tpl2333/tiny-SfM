@@ -12,7 +12,7 @@ class CameraSource(Enum):
     OPTIMIZED = 3   # 优化值 (来自BA的结果，信度最高)
 
 class Camera:
-    def __init__(self, width=None, height=None, is_dist = True):
+    def __init__(self, width=None, height=None, is_dist = False):
         """
         初始化相机对象，必须知道图像尺寸。
         """
@@ -90,30 +90,7 @@ class Camera:
             self.is_locked = True 
             print(f"[Camera] Initialized by CALIBRATION. Locked={self.is_locked}")
 
-    # 优化途径：来自整体优化 (留给 BA 的接口)
-    def get_params_vector(self):
-        """
-        [导出接口]
-        将内参“扁平化”为一个向量，供优化器（如 scipy.optimize 或 Ceres）使用。
-        通常优化器只认 vector，不认 matrix。
-        返回格式示例: [fx, fy, cx, cy, k1, k2, p1, p2, k3]
-        """
-        # 提取 fx, fy, cx, cy
-        fx = self._K[0, 0]
-        fy = self._K[1, 1]
-        cx = self._K[0, 2]
-        cy = self._K[1, 2]
-
-        if self.is_dist:  
-
-            d = self._dist.flatten()
-            params = np.array([fx, fy, cx, cy, d[0], d[1], d[2], d[3], d[4]])
-            return params
-        else:
-            params = np.array([fx, fy, cx, cy])
-            return params
-
-    def update_from_optimization(self, params_vector):
+    def update_focal_simple_pinhole(self, focal):
         """
         [导入接口]
         接收优化器计算出的新向量，更新内部状态。
@@ -122,15 +99,10 @@ class Camera:
             print("[Camera] Warning: Attempting to update a LOCKED camera. Ignored.")
             return
 
-        fx, fy, cx, cy = params_vector[0:4]
-        self._K[0, 0] = fx
-        self._K[1, 1] = fy
-        self._K[0, 2] = cx
-        self._K[1, 2] = cy
-
-        if self.is_dist:
-            self._dist = params_vector[4:].reshape(-1, 1)      
-            self.source = CameraSource.OPTIMIZED
+        self._K[0, 0] = focal
+        self._K[1, 1] = focal
+   
+        self.source = CameraSource.OPTIMIZED
 
     @property
     def K(self):

@@ -24,6 +24,7 @@ class Map:
 
         # registered_idx = set(registered_frame.idx)
         self._registered_ids = set()
+        self._registered_sequence = []
         # 
         self._failed_ids = set()
 
@@ -34,6 +35,9 @@ class Map:
     # -------相机相关方法-------
     def get_intrisics(self):
         return self._camera.K
+
+    def set_focal(self, focal):
+        self._camera.update_focal_simple_pinhole(focal)
 
     # -------帧相关方法-------
     def add_frame(self, img_path):
@@ -66,6 +70,7 @@ class Map:
         frame = self._frames[frame_idx]
         frame.set_pose(R, t)
         self._registered_ids.add(frame.idx)
+        self._registered_sequence.append(frame.idx)
         frame.is_registered = True
 
     def add_failed_frame(self, frame_idx):
@@ -90,6 +95,9 @@ class Map:
     def get_frame(self, frame_idx)->Frame:
         return self._frames.get(frame_idx)
     
+    def get_registered_seq_list(self):
+        return self._registered_sequence
+    
     def all_frames(self):
         for fid in self._frames.keys():
             yield self._frames[fid]
@@ -102,6 +110,7 @@ class Map:
 
         self._points[point.idx] = point
         self._point_count += 1
+        self._point_to_track[point.idx] = track_idx
 
         return point.idx
 
@@ -123,6 +132,22 @@ class Map:
     
     def get_point(self, point_idx)->Point:
         return self._points.get(point_idx)
+    
+    def remove_point(self, point_idx):
+
+        if point_idx not in self._points:
+            return None
+        
+        # 1. 获取对应的轨迹 ID
+        track_idx = self._point_to_track.get(point_idx)
+        
+        # 2. 从各个容器中清理
+        if track_idx is not None:
+            del self._point_to_track[point_idx]
+        
+        del self._points[point_idx]
+        
+        return track_idx
 
 
     

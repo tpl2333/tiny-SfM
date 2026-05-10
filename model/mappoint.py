@@ -18,6 +18,7 @@ class Point:
         # self.observations = {}
 
         self.is_bad = False
+        self.optimize_count = 0
     
     @property
     def position3d(self):
@@ -27,8 +28,10 @@ class Point:
     def color(self):
         return self._color
     
-    def set_position3d(self, pts3d):
+    def set_position3d(self, pts3d, by_optimization = False):
         self._position3d = pts3d
+        if by_optimization:
+            self.optimize_count += 1
     
     # def add_observation(self, frame_idx, feature_idx):
     #     """

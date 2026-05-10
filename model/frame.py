@@ -4,7 +4,7 @@ from model.camera import Camera
 
 class Frame:
 
-    def __init__(self, img_path, frame_idx,camera:Camera):
+    def __init__(self, img_path, frame_idx, camera:Camera):
 
         self.idx = frame_idx
 
@@ -53,6 +53,14 @@ class Frame:
     @property
     def t(self):
         return self._t
+    
+    @property
+    def height(self):
+        return self._img.shape[0]
+    
+    @property
+    def weight(self):
+        return self._img.shape[1]
 
 
     def set_feature(self, kps, des):
