@@ -59,28 +59,26 @@ class DataMiner:
             
         return np.sum(grid) / (grid_size * grid_size)
     
-    def find_next_best_frame(self, worldmap:Map, viewgraph:ViewGraph, trackmanager:TrackManager):
+    def find_next_best_frame(self, worldmap: Map, viewgraph: ViewGraph, trackmanager: TrackManager):
         """
-        寻找下一个最适合注册的帧
+        寻找下一个最适合注册的帧：结合 2D-3D 数量与空间分布率，避免追踪断裂
         """
         registered_ids = worldmap.registered_frame_set
         unregistered_ids = worldmap.unregistered_frame_set
         
         best_frame_idx = None
-        max_correspondences = 0
+        best_score = -1
+        max_correspondences = 0 # 用于返回给主循环做硬门槛拦截
         
-        # 评分字典，用于调试记录
-        scores = {}
-
         for un_idx in unregistered_ids:
             # 1. 检查邻居：只看那些与已注册帧有连接的候选者
             neighbors = viewgraph.get_connected_frames(un_idx)
             if not (neighbors & registered_ids):
                 continue
             
-            # 2. 核心：通过 TrackManager 统计 2D-3D 对应关系
-            # 统计候选帧有多少个特征点所属的 Track 已经有了 3D 点
+            # 2. 统计当前候选帧中，有哪些 2D 特征点对应的 Track 已经有了 3D 点
             corr_count = 0
+            feature_indices_with_3d = [] # 记录这些通过验证的 2D 特征点索引
             frame_obj = worldmap.get_frame(un_idx)
             num_features = len(frame_obj.kps)
             
@@ -88,18 +86,29 @@ class DataMiner:
                 track = trackmanager.get_track_from_feat(un_idx, feat_idx)
                 if track and track.is_triangulated:
                     corr_count += 1
+                    feature_indices_with_3d.append(feat_idx)
             
-            scores[un_idx] = corr_count
+            # 【防崩溃门槛】如果可见点数连 PnP RANSAC 的基础尊严都满足不了，直接淘汰
+            if corr_count < 12:
+                continue
             
-            # 3. 更新最大值
-            if corr_count > max_correspondences:
-                max_correspondences = corr_count
+            # 3. 引入核心安全带：计算这批内点在图像中的空间覆盖率
+            spread_score = self.calculate_spatial_spread(frame_obj, feature_indices_with_3d)
+            
+            # 4. 综合评分机制：
+            # 使用 np.log10 压制纯数量暴利（避免扎堆帧无限连击），强行提高空间分布广度的权重
+            current_score = np.log10(corr_count) * spread_score
+            
+            # 5. 更新最强候选者
+            if current_score > best_score:
+                best_score = current_score
                 best_frame_idx = un_idx
+                max_correspondences = corr_count
 
-        # 阈值检查：如果最多的也只有不到 30 个点，建议停止重建或报错
+        # 调试日志
         if best_frame_idx is None:
-            logger.info(f"没有选定下一个候选帧")
-        elif max_correspondences < 15:
-            logger.warning(f"候选帧 {best_frame_idx} 中最大关联数仅为 {max_correspondences}，重建质量可能下降")
+            logger.info("没有选定下一个候选帧")
+        elif max_correspondences < 20:
+            logger.warning(f"触发边缘追踪：候选帧 {best_frame_idx} 关联数仅为 {max_correspondences}，但空间分布评分良好，尝试强行突围。")
 
         return best_frame_idx, max_correspondences

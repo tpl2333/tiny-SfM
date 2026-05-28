@@ -7,6 +7,7 @@ class Frame:
     def __init__(self, img_path, frame_idx, camera:Camera):
 
         self.idx = frame_idx
+        self.img_path = img_path
 
         self._img = cv2.imread(img_path)
         self._camera = camera  

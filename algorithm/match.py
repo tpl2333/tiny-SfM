@@ -106,6 +106,9 @@ class FeatureMatcher:
         # method = cv2.USAC_MAGSAC if hasattr(cv2, 'USAC_MAGSAC') else cv2.RANSAC
         method = cv2.RANSAC
 
+        if len(unique_matches) < 10:
+            raise InsufficientMatchesError("[match] Too few unique matches after filtering.")
+
         # 4.1 分别计算误差
         # Homography 对称转移误差
         H, mask_H = cv2.findHomography(pts1, pts2, method, ransacReprojThreshold=self.threshold, confidence=self.confidence)
@@ -130,6 +133,9 @@ class FeatureMatcher:
         if F is None:
             GRIC_F = float("inf")
         else:
+            if F.shape[0] > 3:
+                F = F[:3, :]
+
             x1 = np.hstack((pts1.reshape(-1, 2), np.ones((pts1.shape[0], 1))))  #齐次化(N,3)
             x2 = np.hstack((pts2.reshape(-1, 2), np.ones((pts2.shape[0], 1))))
 

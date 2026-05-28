@@ -14,5 +14,4 @@ find_package(Eigen3 REQUIRED)
 pybind11_add_module(ba_core src/ba_core.cpp)
 
 # 4. 连接库
-# 给 ba_core 装上 Ceres 发动机
 target_link_libraries(ba_core PRIVATE Ceres::ceres Eigen3::Eigen)

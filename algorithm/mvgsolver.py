@@ -227,44 +227,52 @@ class MvgSolver:
     
     def get_pose_from_pnp_iter(self, pts_2d: np.ndarray, pts_3d: np.ndarray, K):
         """
-        通过 RANSAC PnP 计算位姿，并进行内点精炼
+        通过 RANSAC PnP 计算位姿，并进行强行挂载与内点精炼
         """
-        # 0. 安全检查：如果点数太少，直接放弃
-        if pts_3d.shape[0] < 4:
-            logger.error("PnP 输入点数不足 4 个，无法计算")
+        # 0. 安全检查：数学底线
+        if pts_3d.shape[0] < 6:
+            logger.error(f"PnP 输入点数不足 6 个 ({pts_3d.shape[0]})，无法进行有限对极解算")
             return None, None, None
 
-        # 1. 第一步：运行 RANSAC PnP 剔除外点
+        # 数据类型与连续性强校验（防止 OpenCV 底层 C++ 报错）
+        pts_3d = np.ascontiguousarray(pts_3d, dtype=np.float32).reshape(-1, 1, 3)
+        pts_2d = np.ascontiguousarray(pts_2d, dtype=np.float32).reshape(-1, 1, 2)
+        K = np.ascontiguousarray(K, dtype=np.float32)
+
+        # 1. 第一步：运行高强度 RANSAC PnP 剔除外点
+        # 在大噪点/高外点率场景下，SQPNP 或 EPNP 的表现远比 ITERATIVE 稳健和快速
+        # 把迭代次数拉满到 1000 次，死磕重复纹理导致的假匹配
+        # 重投影误差放宽到 12.0 像素，特殊时期允许带伤注册，后面靠 BA 自愈
         retval, rvec, tvec, inliers = cv2.solvePnPRansac(
             pts_3d, pts_2d, K, distCoeffs=None, 
-            flags=cv2.SOLVEPNP_ITERATIVE, 
-            iterationsCount=100, 
-            reprojectionError=8.0, 
-            confidence=0.99
+            flags=cv2.SOLVEPNP_SQPNP,       
+            iterationsCount=500,            # 500
+            reprojectionError=8.0,          # 8.0 
+            confidence=0.999                # 提升置信度要求
         )
 
         # 2. 失败判断与门槛检查
         if not retval or inliers is None:
-            logger.error("PnP RANSAC 计算失败！")
+            logger.error("PnP RANSAC 计算失败！维度或几何可能发生严重退化")
             return None, None, None
 
         num_inliers = len(inliers)
-        inlier_ratio = num_inliers / pts_3d.shape[0]
         
-        # 增加最小内点数门槛（比如至少 15-20 个点才认为注册有效）
-        if num_inliers < 15:
-            logger.warning(f"PnP 内点数过少 ({num_inliers})，放弃该帧注册")
+        # P3P 理论上只要 4 个点（3个解算+1个校验），8 个点已经通过了 RANSAC 校验，足够给一个合格的初始位姿了！
+        # 绝不能在困难视角直接 break，只要能挂载上去，下一阶段的“增量三角化”就会疯狂在背面生出新点。
+        if num_inliers < 10:
+            logger.warning(f"PnP 内点数极度匮乏 ({num_inliers} < 8)，为保全全局拓扑，放弃该帧注册")
             return None, None, None
 
-        if inlier_ratio < 0.3: 
-            logger.warning(f"PnP 内点比例过低 ({inlier_ratio:.2f})")
+        if num_inliers < 15:
+            logger.warning(f"触发边缘追踪追踪：当前帧仅靠 {num_inliers} 个内点强行续命挂载！")
 
         # 3. 第二步：位姿精炼 (Refinement)
         inlier_idx = inliers.flatten()
         pts_3d_inliers = pts_3d[inlier_idx]
         pts_2d_inliers = pts_2d[inlier_idx]
 
-        # 使用第一步的 rvec, tvec 作为初值进行优化
+        # 使用第一步 RANSAC 的非线性结果作为初值，用 ITERATIVE 进行微调精炼
         success, rvec_refined, tvec_refined = cv2.solvePnP(
             pts_3d_inliers, pts_2d_inliers, K, distCoeffs=None,
             rvec=rvec, tvec=tvec, 
@@ -276,6 +284,7 @@ class MvgSolver:
             R, _ = cv2.Rodrigues(rvec_refined)
             return R, tvec_refined, inliers
         else:
-            # 如果精炼失败，至少返回 RANSAC 的结果
+            # 如果精炼由于非线性不收敛失败，直接降级返回 RANSAC 的保底结果！
+            logger.warning("PnP Refinement 优化不收敛，启用 RANSAC 原始结果保底。")
             R, _ = cv2.Rodrigues(rvec)
             return R, tvec, inliers

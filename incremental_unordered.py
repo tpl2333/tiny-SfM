@@ -92,7 +92,7 @@ class Reconstructor:
             # 2.1 挑选下一帧
             next_frame_idx, count = self.dataminer.find_next_best_frame(self.worldmap, self.viewgraph, self.trackmanager)
             
-            if next_frame_idx is None or count < 30:
+            if next_frame_idx is None or count < 8:
                 logger.info("没有合适的候选帧或所有帧已注册，重建结束。")
                 break
                 
@@ -137,7 +137,7 @@ class Reconstructor:
 
                 point_info_to_add = [] # 存储通过严选的点
 
-                # --- 核心变更：逐轨迹进行精英审计 ---
+                # 逐轨迹进行精英审计
                 for track_idx, m in zip(tri_tracks_ids, tri_matches):
                     track = self.trackmanager.get_track_from_idx(track_idx)
                     pt_new = f_new.kps[m[0]].pt
@@ -187,14 +187,14 @@ class Reconstructor:
                                     max_saturation = saturation
                                     best_color = c
                         
-                        # 如果没选到（理论上不会），就用当前帧保底
+                        # 如果没选到，就用当前帧保底
                         if best_color is None:
                             kp_new = f_new.kps[m[0]]
                             best_color = f_new.get_color(int(kp_new.pt[0]), int(kp_new.pt[1]))
 
                         point_info_to_add.append((track_idx, pt3d_final, best_color))
 
-                # --- 执行安全入库 ---
+                #  执行安全入库 
                 if point_info_to_add:
                     p_indices = self.add_new_points_safely(point_info_to_add)
                     logger.info(f" 帧 {next_frame_idx} 与 {rb_idx}: 通过审计，新增了 {len(p_indices)} 个点")
@@ -340,11 +340,11 @@ if __name__ == "__main__":
     from incremental_unordered import Reconstructor
 
     # 1. 设定参数（请根据你的实际路径修改）
-    img_dir = "./data/frame" # 图像文件夹路径
+    img_dir = "./data/synthetic/ship/test" # 图像文件夹路径
     
     # 2. 定义相机内参 
     cam = Camera(height=800,width=800)
-    cam.setup_by_guess()
+    cam.setup_by_guess(fov_scale=1.5625)
 
     # 3. 启动重构流水线
     try:
@@ -353,6 +353,9 @@ if __name__ == "__main__":
         
         # 运行初始化流程 (寻找种子、位姿恢复、三角化)
         recon.run()
+
+        output_colmap_dir = "./output/synthetic/ship"
+        recon.worldmap.save_as_colmap(output_colmap_dir, recon.trackmanager)
         
         # 4. 调用可视化
         visualize_reconstruction(recon)
