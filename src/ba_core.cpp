@@ -3,21 +3,20 @@
 #include <ceres/ceres.h>
 #include <ceres/rotation.h>
 #include <Eigen/Core>
-#include <iostream>
+#include <string>
 
 namespace py = pybind11;
 
-// SIMPLE_PINHOLE: shared focal
+// Reprojection residual for a SIMPLE_PINHOLE camera with one shared focal.
 struct SnavelySharedFocalError {
 
-    // 构造时传入观测到的像素坐标 [u, v]
     SnavelySharedFocalError(double obsx, double obsy, double cx, double cy)
         : obs_x(obsx), obs_y(obsy), c_x(cx), c_y(cy) {}
 
     template <typename T>
-    bool operator()(const T* const pose, // SIMPLE_PINHOLE [r1,r2,r3,t1,t2,t3]
-                    const T* const focal,  // shared_focal_length f
-                    const T* const point,  // mapppoint coordination [X, Y, Z]
+    bool operator()(const T* const pose,   // [angle_axis(3), translation(3)]
+                    const T* const focal,  // shared focal length
+                    const T* const point,  // world point [X, Y, Z]
                     T* residuals) const {
 
         T p[3];
@@ -41,18 +40,18 @@ struct SnavelySharedFocalError {
 };
 
 
-void solve_ba_shared_focal(
-    py::array_t<double> poses,              // (N, 6) - [r1,r2,r3, t1,t2,t3]
-    py::array_t<double> points,             // (M, 3) - [X,Y,Z]
-    py::array_t<double> focal,              // (1,)   - f
-    py::array_t<double> observations,       // (K, 2) - [u, v]
-    py::array_t<int> camera_indices,        // (K,)   - 每条观测对应的相机 ID
-    py::array_t<int> point_indices,         // (K,)   - 每条观测对应的点 ID
-    py::array_t<int> fixed_camera_indices,  // (k,)   - 不需要优化参数的相机 ID
-    bool is_fixed_focal,                    // 是否固定焦距
-    double c_x, double c_y                  // 固定主点坐标
+std::string solve_ba_shared_focal(
+    py::array_t<double> poses,              // (N, 6)
+    py::array_t<double> points,             // (M, 3)
+    py::array_t<double> focal,              // (1,)
+    py::array_t<double> observations,       // (K, 2)
+    py::array_t<int> camera_indices,        // (K,)
+    py::array_t<int> point_indices,         // (K,)
+    py::array_t<int> fixed_camera_indices,  // (F,)
+    bool is_fixed_focal,
+    double c_x, double c_y
 ) {
-    // 1. 获取原始指针 (直接操作内存，实现零拷贝)
+    // Work directly on numpy buffers so Python sees optimized values.
     auto p_poses = poses.mutable_data();
     auto p_points = points.mutable_data();
     auto p_focal = focal.mutable_data();
@@ -61,21 +60,16 @@ void solve_ba_shared_focal(
     auto p_point_idx = point_indices.data();
     auto p_fixed_camera_idx = fixed_camera_indices.data();
 
-    // 2. 实例化 Ceres 问题
     ceres::Problem problem;
 
-    // 鲁棒核函数：如果投影误差超过 1 像素，它会降低权重
+    // Robust loss limits the influence of residual outliers.
     ceres::LossFunction* loss_function = new ceres::HuberLoss(1.0);
 
-    // 3. 核心循环：将所有观测添加为残差块
     for (int i = 0; i < camera_indices.size(); ++i) {
-        // 创建代价函数 (自动求导模式)
-        // 参数含义: <结构体, 残差维度2, 相机参数维度6, 焦距参数维度1, 点参数维度3>
         ceres::CostFunction* cost_function =
             new ceres::AutoDiffCostFunction<SnavelySharedFocalError, 2, 6, 1, 3>(
                 new SnavelySharedFocalError(p_obs[2*i], p_obs[2*i+1], c_x, c_y));
 
-        // 获取当前观测对应的相机和点在内存里的位置
         double* current_camera = p_poses + p_camera_idx[i] * 6;
         double* current_point = p_points + p_point_idx[i] *  3;
 
@@ -94,18 +88,15 @@ void solve_ba_shared_focal(
         problem.SetParameterBlockConstant(p_focal);
     }
 
-    // 4. 配置求解器选项
     ceres::Solver::Options options;
     options.linear_solver_type = ceres::DENSE_SCHUR; 
-    options.minimizer_progress_to_stdout = true;    
+    options.minimizer_progress_to_stdout = false;    
     options.max_num_iterations = 100;                
 
-    // 5. 启动优化
     ceres::Solver::Summary summary;
     ceres::Solve(options, &problem, &summary);
 
-    std::cout << summary.BriefReport() << std::endl; 
-    if (summary.termination_type == ceres::FAILURE) std::cout << "BA Optimization Failed!" << std::endl;
+    return summary.BriefReport();
 }
 
 PYBIND11_MODULE(ba_core, m) {

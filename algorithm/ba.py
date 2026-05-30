@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import scipy
 import scipy.optimize 
+import logging
 from scipy.sparse import lil_matrix
 
 from model.camera import Camera
@@ -9,18 +10,24 @@ from model.frame import Frame
 from model.mappoint import Point
 from management.worldmap import Map
 
+logger = logging.getLogger(__name__)
+
 
 class BA:
+    """Legacy SciPy bundle-adjustment implementation.
+
+    The active pipeline uses algorithm.ba_ceres.BundleAdjuster. This class is
+    kept as a readable Python reference for residual construction and sparsity.
+    """
 
     def __init__(self, map:Map):
 
         self.map = map
 
-        # 根据帧或点的id查询打包后位置
-        # frame.idx/point.idx : params_position(int)
+        # Project ids are mapped to offsets inside the flattened parameter vector.
         self.frame_2_params_idx = {}
         self.point_2_params_idx = {}
-        self.intrisic_2_params_idx = None # 内参起始点
+        self.intrisic_2_params_idx = None
 
     def pack_params(self):
 
@@ -66,7 +73,7 @@ class BA:
             list(self.map.frames.values())[0].camera.update_from_optimization(cam_vec)
 
     def get_residuals(self, params):
-        """计算所有观测的重投影误差"""
+        """Compute all reprojection residuals for least-squares optimization."""
         residuals = []
         if self.intrisic_2_params_idx is not None:
             intrisic = params[self.intrisic_2_params_idx:]
@@ -77,16 +84,13 @@ class BA:
         for point_idx, point in self.map.points.items():
             if point.is_bad: continue
             
-            # 获取当前点的 3D 坐标
             p_idx = self.point_2_params_idx[point_idx]
             pw = params[p_idx : p_idx + 3]
 
             for frame_idx, feature_idx in point.observations.items():
                 frame = self.map.frames[frame_idx]
 
-                # 获取该帧对应的 R 和 t
                 if frame_idx == 0:
-                    # 第一帧固定，直接用原始 R, t
                     R, t = frame.R, frame.t
                 else:
                     f_idx = self.frame_2_params_idx[frame_idx]
@@ -94,26 +98,20 @@ class BA:
                     t = params[f_idx + 3 : f_idx + 6].reshape(3, 1)
                     R, _ = cv2.Rodrigues(r_vec)
 
-                # 到相机坐标系：World -> Camera
                 pc = R @ pw.reshape(3, 1) + t
                 
-                # 防止数值溢出或点在相机背面，加入惩罚项
                 if pc[2, 0] < 1e-6:
                     residuals.extend([100.0, 100.0]) 
                     continue
                 
-                # 归一化
                 z = pc[2, 0]
                 x_n, y_n = pc[0,0]/z, pc[1,0]/z 
 
-                # 对于frame共用内参的优化
                 if self.intrisic_2_params_idx is None:
-                    #无畸变，不优化
                     K = frame.camera.K
                     u_proj = K[0, 0] * x_n + K[0, 2]
                     v_proj = K[1, 1] * y_n + K[1, 2]
                 elif list(self.map.frames.values())[0].camera.is_dist:
-                    # 有畸变，需要优化
                     r2 = x_n**2 + y_n**2
                     r4 = r2**2
                     r6 = r2**3
@@ -124,11 +122,9 @@ class BA:
                     u_proj = fx * x_dist + cx
                     v_proj = fy * y_dist + cy
                 else:
-                    # 无畸变，需要优化
                     u_proj = fx * x_n + cx
                     v_proj = fy * y_n + cy
 
-                # 获取观测到的 2D 坐标
                 u_obs, v_obs = frame.get_2d_position(feature_idx)
                 
                 residuals.append(u_proj - u_obs)
@@ -137,12 +133,11 @@ class BA:
         return np.array(residuals)
 
     def optimize(self):
-        """执行优化"""
+        """Run sparse nonlinear least squares and write results back to the map."""
         x0 = self.pack_params()
 
         sparsity = self.get_sparsity_matrix(x0)
         
-        # 使用更具鲁棒性的损失函数 (loss='soft_l1') 来抑制外点
         res = scipy.optimize.least_squares(
             self.get_residuals, 
             x0, 
@@ -150,12 +145,12 @@ class BA:
             x_scale='jac',
             method='trf', 
             loss='soft_l1', 
-            f_scale=1.0, # 这里的 f_scale 相当于像素误差的阈值
-            verbose=2
+            f_scale=1.0,
+            verbose=0
         )
         
         self.unpack_params(res.x)
-        print(f"BA 优化完成。初始误差: {np.linalg.norm(res.fun):.2f}") 
+        logger.info(f"BA 优化完成。残差范数: {np.linalg.norm(res.fun):.2f}") 
 
     def get_sparsity_matrix(self, params):
         n_res = 0
@@ -172,17 +167,13 @@ class BA:
             p_start = self.point_2_params_idx[pt_idx]
             
             for frame_idx, _ in pt.observations.items():
-                # 1. 关联 3D 点
                 sparsity[res_idx : res_idx + 2, p_start : p_start + 3] = 1
                 
-                # 2. 关联 相机位姿 (非第0帧)
                 if frame_idx in self.frame_2_params_idx:
                     f_start = self.frame_2_params_idx[frame_idx]
                     sparsity[res_idx : res_idx + 2, f_start : f_start + 6] = 1
                 
-                # 3. 关联 相机内参 (重点：如果开启了内参优化，每一行残差都要对内参列置 1)
                 if self.intrisic_2_params_idx is not None:
-                    # 索引区间从 intrisic_2_params_idx 直到末尾
                     sparsity[res_idx : res_idx + 2, self.intrisic_2_params_idx : ] = 1
                     
                 res_idx += 2
@@ -190,37 +181,29 @@ class BA:
         return sparsity 
     
     def calculate_rmse(self, params=None):
-        """
-        计算当前参数下的均方根重投影误差 (Pixels)
-        """
+        """Report reprojection error statistics in pixels."""
         if params is None:
-            # 如果不传参，默认计算优化后的当前状态
             residuals = self.get_residuals(self.pack_params())
         else:
             residuals = self.get_residuals(params)
 
-        # residuals 是 [u1-u1', v1-v1', u2-u2', v2-v2', ...]
-        # 我们需要每两个一组计算欧式距离，或者直接对整个向量求均方根
-        num_observations = len(residuals) / 2 # 每个点有两个坐标观测
+        num_observations = len(residuals) / 2
         
-        # 物理意义上的 RMSE (单位：像素)
         mse = np.mean(np.square(residuals))
         rmse = np.sqrt(mse)
         
-        # 计算平均重投影误差 (更直观的 L1 范数)
-        # 将 residuals 重新排列为 (N, 2)
         res_reshaped = residuals.reshape(-1, 2)
-        l2_norms = np.linalg.norm(res_reshaped, axis=1) # 每个观测点的像素偏差
+        l2_norms = np.linalg.norm(res_reshaped, axis=1)
         mean_error = np.mean(l2_norms)
         max_error = np.max(l2_norms)
 
-        print("-" * 30)
-        print(f"BA 质量评估报告:")
-        print(f"观测点总数: {int(num_observations)}")
-        print(f"RMSE (像素): {rmse:.4f}")
-        print(f"平均误差 (像素): {mean_error:.4f}")
-        print(f"最大偏差 (像素): {max_error:.4f}")
-        print("-" * 30)
+        logger.info(
+            "BA 质量评估报告:\n"
+            f"观测点总数: {int(num_observations)}\n"
+            f"RMSE (像素): {rmse:.4f}\n"
+            f"平均误差 (像素): {mean_error:.4f}\n"
+            f"最大偏差 (像素): {max_error:.4f}"
+        )
         
         return rmse             
 

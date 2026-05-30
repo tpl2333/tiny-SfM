@@ -1,52 +1,43 @@
 import numpy as np
 import cv2
+import logging
 from enum import Enum
 
+logger = logging.getLogger(__name__)
+
 class CameraSource(Enum):
-    """
-    标记相机内参的来源信度
-    """
-    UNKNOWN = 0     # 未初始化
-    GUESS = 1       # 猜测值 (信度低，BA优化时通常需要调整)
-    CALIBRATED = 2  # 标定值 (信度高，BA优化时通常固定或仅微调)
-    OPTIMIZED = 3   # 优化值 (来自BA的结果，信度最高)
+    """Origin of the intrinsic parameters."""
+    UNKNOWN = 0
+    GUESS = 1
+    CALIBRATED = 2
+    OPTIMIZED = 3
 
 class Camera:
     def __init__(self, width=None, height=None, is_dist = False):
-        """
-        初始化相机对象，必须知道图像尺寸。
-        """
+        """Create a shared pinhole camera model for all frames."""
         self.width = width
         self.height = height
         self.is_dist = is_dist
         
-        # 核心数据：内参矩阵 K (3x3) 和 畸变系数 D (1x5 or 1xN)
+        # K is the active intrinsic matrix; dist is reserved for calibrated input.
         self._K = np.eye(3, dtype=np.float64)
-        self._dist = np.zeros((5, 1), dtype=np.float64) # 默认无畸变
+        self._dist = np.zeros((5, 1), dtype=np.float64)
         
-        # 状态标志位
         self.source = CameraSource.UNKNOWN
         
-        # 锁定机制：如果为 True，在优化阶段不应该修改此相机的参数
+        # Locked intrinsics are not updated by BA.
         self.is_locked = False 
 
     def set_size(self, height, width):
-        """
-        设置图像尺寸，防止和frame冲突
-        """
+        """Set image dimensions and warn if they change after initialization."""
         if self.width is not None and (self.width != width or self.height != height):
-            print(f"[Camera] Warning: Image size changed from {self.width}x{self.height} to {width}x{height}!")
-            # 在某些变焦或裁切场景下可能合法，但通常意味着错误
+            logger.warning(f"Image size changed from {self.width}x{self.height} to {width}x{height}")
         
         self.width = width
         self.height = height
 
-    # 初始化途径一：猜
     def setup_by_guess(self, fov_scale=1.2, lock_it = False):
-        """
-        接口1：当没有标定数据时，根据图像尺寸粗略估计内参。
-        通常假设光心在图像中心，焦距为图像宽度的 1.2 倍左右。
-        """
+        """Initialize intrinsics from image size when calibration is unavailable."""
         if self.width is None or self.height is None:
             raise ValueError("[Camera] Cannot guess intrinsics without image size! Call set_size() first.")
         
@@ -60,22 +51,19 @@ class Camera:
             [0, 0, 1]
         ], dtype=np.float64)
         
-        self._dist = np.zeros((5, 1), dtype=np.float64) # 猜测时通常假设无畸变
+        self._dist = np.zeros((5, 1), dtype=np.float64)
         
         self.source = CameraSource.GUESS
         
         if lock_it:
             self.is_locked = True 
-            print(f"[Camera] Initialized by GUESS. Locked={self.is_locked}")
+            logger.info(f"Initialized camera by guess. Locked={self.is_locked}")
         else:
             self.is_locked = False 
-            print(f"[Camera] Initialized by GUESS. K:\n{self._K}")
+            logger.info(f"Initialized camera by guess. K:\n{self._K}")
 
-    # 初始化途径二：标定
     def setup_by_calibration(self, height, width, K, dist, lock_it=True):
-        """
-        接口2：接收来自 cv2.calibrateCamera 的结果。
-        """
+        """Initialize intrinsics from an external calibration result."""
         self.set_size(height, width)
 
         if self.width is None or self.height is None:
@@ -88,15 +76,12 @@ class Camera:
         
         if lock_it:
             self.is_locked = True 
-            print(f"[Camera] Initialized by CALIBRATION. Locked={self.is_locked}")
+            logger.info(f"Initialized camera by calibration. Locked={self.is_locked}")
 
     def update_focal_simple_pinhole(self, focal):
-        """
-        [导入接口]
-        接收优化器计算出的新向量，更新内部状态。
-        """
+        """Update the shared focal length after SIMPLE_PINHOLE BA."""
         if self.is_locked:
-            print("[Camera] Warning: Attempting to update a LOCKED camera. Ignored.")
+            logger.warning("Attempted to update a locked camera. Ignored.")
             return
 
         self._K[0, 0] = focal
@@ -106,7 +91,7 @@ class Camera:
 
     @property
     def K(self):
-        """只读属性，防止外部直接修改 self.K = ... 破坏状态"""
+        """Return the active 3x3 intrinsic matrix."""
         return self._K
 
     @property

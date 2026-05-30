@@ -13,24 +13,13 @@ from management.worldmap import Map
 from algorithm.errors import *
 
 class MvgSolver:
+    """Multi-view geometry helpers used by the incremental pipeline."""
     
-    # ==================== 1. 初始化位姿解算  ====================
     def get_initial_pose(self, frame1:Frame, frame2:Frame, edge:EdgeData):
-        """ 计算本质矩阵获取初始位姿
+        """Recover the relative pose of the second seed frame.
 
-        Args:
-            frame1 (Frame): _description_
-            frame2 (Frame): _description_
-            edge (EdgeData): _description_
-            view_graph (ViewGraph): _description_
-
-        Raises:
-            ValueError: _description_
-
-        Returns:
-            R: Matlike 旋转矩阵 W2C
-            t: Matlike 平移向量 W2C
-            D_inlier_matches: 经过手性检测后的内点，满足深度测试
+        The returned pose follows the project convention X_cam = R * X_world + t.
+        The first seed frame is assumed to be identity by the caller.
         """
         pts1 = np.float32([frame1.kps[m].pt for m in edge.query_indices]).reshape(-1, 1, 2)
         pts2 = np.float32([frame2.kps[m].pt for m in edge.train_indices]).reshape(-1, 1, 2)
@@ -47,23 +36,10 @@ class MvgSolver:
         return R, t, D_inlier_matches
 
     def triangulate(self, frame1:Frame, frame2:Frame, tri_tracks:list[int], tri_matches:np.ndarray, K):
-        """ 三角化两帧之间的对应点
-
-        Args:
-            frame1 (Frame): _description_
-            frame2 (Frame): _description_
-            tri_tracks (list[int]): _description_
-            tri_matches (np.ndarray): _description_
-
-        Raises:
-            TriangulateError: _description_
-
-        Returns:
-            point_info (list[tuple]): [(track_idx, position3d, color)]
-        """
+        """Triangulate candidate tracks observed by two registered frames."""
         tri_matches = np.atleast_2d(tri_matches)
         if frame1.idx == 21:
-            print(f"DEBUG: {frame1.idx}-{frame2.idx} 匹配数: {tri_matches.shape}")
+            logger.debug(f"{frame1.idx}-{frame2.idx} 匹配数: {tri_matches.shape}")
 
         if len(tri_matches) == 0:
             return []
@@ -79,9 +55,9 @@ class MvgSolver:
         if points4d is None:
             raise TriangulateError(f"[reconstructor]: triangulation bewteen frame {frame1.idx} and {frame2.idx} failed")
 
-        xyz = points4d[:3, :] #[3, N]
-        w = points4d[3:, :]   #[1, N]
-        points_normalized = (xyz / w).T #归一化并转置 [N, 3]
+        xyz = points4d[:3, :]
+        w = points4d[3:, :]
+        points_normalized = (xyz / w).T
 
         o1 = frame1.get_center().flatten()
         o2 = frame2.get_center().flatten()
@@ -94,13 +70,13 @@ class MvgSolver:
         point_info = []
         for i, x in enumerate(points_normalized):
 
-            # 深度检测 
+            # Keep points in front of both cameras.
             p_c1 = R1 @ x.reshape(3,1) + t1
             p_c2 = R2 @ x.reshape(3,1) + t2
             if p_c1[2] <= 0 or p_c2[2] <= 0:
                 continue
 
-            # 视差角检测 
+            # Small parallax makes depth unstable.
             o1x = x - o1
             o2x = x - o2
             norm_o1x = np.linalg.norm(o1x)
@@ -111,19 +87,16 @@ class MvgSolver:
             if cos_theta > max_cos_threshold:
                 continue
 
-            # 重投影检测
             match = tri_matches[i]
             track_idx = tri_tracks[i]
             f1_feat_idx = match[0]
             f2_feat_idx = match[1]
             
-            # 投影到相机1的像素平面
             proj1 = K @ p_c1
             u1_proj, v1_proj = proj1[0, 0] / proj1[2, 0], proj1[1, 0] / proj1[2, 0]
             u1_obs, v1_obs = frame1.kps[f1_feat_idx].pt
             err1 = np.sqrt((u1_proj - u1_obs)**2 + (v1_proj - v1_obs)**2)
 
-            # 投影到相机2的像素平面
             proj2 = K @ p_c2
             u2_proj, v2_proj = proj2[0, 0] / proj2[2, 0], proj2[1, 0] / proj2[2, 0]
             u2_obs, v2_obs = frame2.kps[f2_feat_idx].pt
@@ -132,7 +105,6 @@ class MvgSolver:
             if err1 > repro_error_threshold or err2 > repro_error_threshold:
                 continue
 
-            # 获取颜色
             u, v = map(int, frame1.kps[f1_feat_idx].pt) 
             bgr = frame1.get_color(u,v) 
             rgb = bgr[::-1] / 255.0
@@ -142,36 +114,30 @@ class MvgSolver:
         return point_info
     
 
-    # ==================== 2. 三角化的妙妙小工具  ====================
-
     def calculate_repro_error(self, pt3d, R, t, K, pt2d):
-        """ 计算单点重投影误差和深度 """
-        # Pc = R*X + t
+        """Return pixel reprojection error and camera-space depth."""
         pc = R @ pt3d.reshape(3, 1) + t.reshape(3, 1)
         depth = pc[2, 0]
         if depth <= 1e-6:
             return float('inf'), depth
         
-        # 投影到像素平面
         p_img = K @ pc
         u, v = p_img[0, 0] / p_img[2, 0], p_img[1, 0] / p_img[2, 0]
         error = np.linalg.norm(np.array([u, v]) - pt2d)
         return error, depth
 
     def calculate_parallax(self, pt3d, R1, t1, R2, t2):
-        """ 计算两个相机对该点的观测视差角 """
+        """Return the viewing-angle parallax of one point in degrees."""
         c1 = -R1.T @ t1.reshape(3, 1)
         c2 = -R2.T @ t2.reshape(3, 1)
         v1, v2 = pt3d.reshape(3, 1) - c1, pt3d.reshape(3, 1) - c2
         n1, n2 = np.linalg.norm(v1), np.linalg.norm(v2)
         if n1 < 1e-6 or n2 < 1e-6: return 0.0
-        # 向量夹角余弦公式
         cos_theta = np.dot(v1.T, v2) / (n1 * n2)
         return np.degrees(np.arccos(np.clip(cos_theta, -1.0, 1.0)))
 
-    # ==================== 3. 核心三角化与校验  ====================
     def triangulate_simple(self, R1, t1, pt1, R2, t2, pt2, K):
-        """ 使用 OpenCV 快速计算两帧三角化坐标 """
+        """Triangulate one matched pixel pair with two known poses."""
         P1 = K @ np.hstack((R1, t1.reshape(3, 1)))
         P2 = K @ np.hstack((R2, t2.reshape(3, 1)))
         
@@ -182,15 +148,11 @@ class MvgSolver:
         return pt4d[:3, 0] / pt4d[3, 0]
 
     def verify_multi_view_consensus(self, pt3d, track, worldmap, err_thresh=4.0):
-        """
-        多视图公投校验逻辑 (COLMAP 核心思路)
-        返回: (是否通过, 最大视差角, 最佳基线对位姿信息)
-        """
+        """Validate a tentative 3D point against all registered observations."""
         K = worldmap.get_intrisics()
         valid_poses = []
         
-        # 1. 投影校验 (一票否决)
-        # 遍历该轨迹中所有已注册的帧，检查这个 3D 点在大家眼里是否都对劲
+        # Reject if any registered observation disagrees with this point.
         for f_idx, feat_idx in track.observations:
             if f_idx not in worldmap._registered_ids:
                 continue
@@ -200,14 +162,14 @@ class MvgSolver:
             
             err, depth = self.calculate_repro_error(pt3d, frame.R, frame.t, K, pt2d)
             if err > err_thresh or depth <= 0:
-                return False, 0.0, None # 只要有一帧对不上，这就是个烂点
+                return False, 0.0, None
             
             valid_poses.append({'R': frame.R, 't': frame.t, 'pt': pt2d, 'id': f_idx})
 
         if len(valid_poses) < 2:
             return False, 0.0, None
 
-        # 2. 寻找最大视差角 (确定地基是否稳固)
+        # The best baseline is reused to recompute a more stable point.
         max_parallax = 0.0
         best_pair = None
         for i in range(len(valid_poses)):
@@ -219,60 +181,44 @@ class MvgSolver:
                     best_pair = (valid_poses[i], valid_poses[j])
                     
         return True, max_parallax, best_pair
-
-
-
-
-    # ==================== 4. PnP位姿解算  ====================  
-    
     def get_pose_from_pnp_iter(self, pts_2d: np.ndarray, pts_3d: np.ndarray, K):
-        """
-        通过 RANSAC PnP 计算位姿，并进行强行挂载与内点精炼
-        """
-        # 0. 安全检查：数学底线
+        """Estimate a frame pose from 2D-3D correspondences using PnP RANSAC."""
         if pts_3d.shape[0] < 6:
             logger.error(f"PnP 输入点数不足 6 个 ({pts_3d.shape[0]})，无法进行有限对极解算")
             return None, None, None
 
-        # 数据类型与连续性强校验（防止 OpenCV 底层 C++ 报错）
+        # OpenCV PnP is sensitive to dtype and memory layout.
         pts_3d = np.ascontiguousarray(pts_3d, dtype=np.float32).reshape(-1, 1, 3)
         pts_2d = np.ascontiguousarray(pts_2d, dtype=np.float32).reshape(-1, 1, 2)
         K = np.ascontiguousarray(K, dtype=np.float32)
 
-        # 1. 第一步：运行高强度 RANSAC PnP 剔除外点
-        # 在大噪点/高外点率场景下，SQPNP 或 EPNP 的表现远比 ITERATIVE 稳健和快速
-        # 把迭代次数拉满到 1000 次，死磕重复纹理导致的假匹配
-        # 重投影误差放宽到 12.0 像素，特殊时期允许带伤注册，后面靠 BA 自愈
+        # First pass: robust pose hypothesis and outlier rejection.
         retval, rvec, tvec, inliers = cv2.solvePnPRansac(
             pts_3d, pts_2d, K, distCoeffs=None, 
             flags=cv2.SOLVEPNP_SQPNP,       
-            iterationsCount=500,            # 500
-            reprojectionError=8.0,          # 8.0 
-            confidence=0.999                # 提升置信度要求
+            iterationsCount=500,
+            reprojectionError=8.0,
+            confidence=0.999
         )
 
-        # 2. 失败判断与门槛检查
         if not retval or inliers is None:
             logger.error("PnP RANSAC 计算失败！维度或几何可能发生严重退化")
             return None, None, None
 
         num_inliers = len(inliers)
         
-        # P3P 理论上只要 4 个点（3个解算+1个校验），8 个点已经通过了 RANSAC 校验，足够给一个合格的初始位姿了！
-        # 绝不能在困难视角直接 break，只要能挂载上去，下一阶段的“增量三角化”就会疯狂在背面生出新点。
         if num_inliers < 10:
             logger.warning(f"PnP 内点数极度匮乏 ({num_inliers} < 8)，为保全全局拓扑，放弃该帧注册")
             return None, None, None
 
         if num_inliers < 15:
-            logger.warning(f"触发边缘追踪追踪：当前帧仅靠 {num_inliers} 个内点强行续命挂载！")
+            logger.warning(f"PnP 内点较少 ({num_inliers})，位姿可能不稳定。")
 
-        # 3. 第二步：位姿精炼 (Refinement)
         inlier_idx = inliers.flatten()
         pts_3d_inliers = pts_3d[inlier_idx]
         pts_2d_inliers = pts_2d[inlier_idx]
 
-        # 使用第一步 RANSAC 的非线性结果作为初值，用 ITERATIVE 进行微调精炼
+        # Second pass: nonlinear refinement from the RANSAC pose.
         success, rvec_refined, tvec_refined = cv2.solvePnP(
             pts_3d_inliers, pts_2d_inliers, K, distCoeffs=None,
             rvec=rvec, tvec=tvec, 
@@ -284,7 +230,6 @@ class MvgSolver:
             R, _ = cv2.Rodrigues(rvec_refined)
             return R, tvec_refined, inliers
         else:
-            # 如果精炼由于非线性不收敛失败，直接降级返回 RANSAC 的保底结果！
             logger.warning("PnP Refinement 优化不收敛，启用 RANSAC 原始结果保底。")
             R, _ = cv2.Rodrigues(rvec)
             return R, tvec, inliers

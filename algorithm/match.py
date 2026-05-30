@@ -11,6 +11,8 @@ from management.viewgraph import ViewGraph
 from algorithm.errors import *
 
 class FeatureMatcher:
+    """Feature extraction, pairwise matching, and two-view model selection."""
+
     def __init__(self, extractor_type='sift', matcher_type='bf',threshold_pixel=3, confidence=0.999):
 
         self.extractor_type = extractor_type
@@ -25,32 +27,25 @@ class FeatureMatcher:
             self.extractor = cv2.ORB_create()
             norm_type = cv2.NORM_HAMMING 
         else:
-            print("[matching] Extractor selection error! Defaulting to SIFT")
+            logger.warning("Unknown extractor type; defaulting to SIFT")
             self.extractor = cv2.SIFT_create()
             norm_type = cv2.NORM_L2
 
         if self.matcher_type == 'bf':
             self.matcher = cv2.BFMatcher(norm_type, crossCheck=False)
         else:
-            print("[matching] Matcher selection error! Defaulting to BFMatcher")
+            logger.warning("Unknown matcher type; defaulting to BFMatcher")
             self.matcher = cv2.BFMatcher(norm_type, crossCheck=False)
     
-    # --------- 核心方法 ---------
     def extract(self, frame:Frame):
-        """
-        提取特征方法：
-        1. 检查 Frame 是否已有特征点（避免重复计算）
-        2. 如果没有，计算并存入 Frame
-        """
+        """Extract local features once and cache them on the frame."""
         grayimg = cv2.cvtColor(frame._img, cv2.COLOR_BGR2GRAY)
         if len(frame.kps) < 1:
             kps, des = self.extractor.detectAndCompute(grayimg, None)
             frame.set_feature(kps, des)
 
     def extract_all(self, frames:list[Frame]):
-        """
-        批量提取特征
-        """
+        """Extract features for a list of frames."""
         if not frames:
             return False
         
@@ -59,34 +54,24 @@ class FeatureMatcher:
 
     
     def match_2d_pair(self, f1:Frame, f2:Frame):
-        """        
-        两帧之间特征点的匹配与几何验证
-        frame1, frame2: 匹配的两帧
+        """Match two frames and select either homography or fundamental geometry.
 
-        Args:
-            f1 (Frame): query_frame
-            f2 (Frame): train_frame
-
-        Raises:
-            InsufficientMatchesError: 错误：没有足够匹配点
-
-        Returns:
-            model, inlier_matches, inlier_ratio, model_type, GRIC_F, GRIC_H
+        Returns the selected model, its inlier matches, the inlier ratio, the
+        selected model type ("H" or "F"), and both GRIC scores.
         """
 
         if len(f1.des) < 8 or len(f2.des) < 8:
             raise InsufficientMatchesError("[match] the number of matching points error, none or less than 8")
         
-        # 1. knn 匹配
         raw_matches = self.matcher.knnMatch(f1.des, f2.des, k=2)
 
-        # 2. lowe比率测试，滤除自相似的纹理
+        # Lowe ratio test removes ambiguous descriptor matches.
         ratio_matches = []
         for m, n in raw_matches:
             if m.distance< 0.75*n.distance:
                 ratio_matches.append(m)
 
-        # 3. 双射过滤，避免多对一匹配情况 (A->B，C->B)
+        # Keep the best one-to-one assignment after the ratio test.
         ratio_matches.sort(key=lambda x: x.distance)
         unique_matches = []
         used_q = set()
@@ -97,20 +82,17 @@ class FeatureMatcher:
                 used_q.add(m.queryIdx)
                 used_t.add(m.trainIdx)
 
-        # 4. 对极几何验证 
-        # 提取匹配点对，并转换为[N,1,2]的numpy格式
         pts1 = np.float32([f1.kps[m.queryIdx].pt for m in unique_matches]).reshape(-1, 1, 2)
         pts2 = np.float32([f2.kps[m.trainIdx].pt for m in unique_matches]).reshape(-1, 1, 2)
 
-        # 使用RANSAC计算基础矩阵
+        # RANSAC keeps the view graph robust to descriptor outliers.
         # method = cv2.USAC_MAGSAC if hasattr(cv2, 'USAC_MAGSAC') else cv2.RANSAC
         method = cv2.RANSAC
 
         if len(unique_matches) < 10:
             raise InsufficientMatchesError("[match] Too few unique matches after filtering.")
 
-        # 4.1 分别计算误差
-        # Homography 对称转移误差
+        # Homography score uses symmetric transfer error.
         H, mask_H = cv2.findHomography(pts1, pts2, method, ransacReprojThreshold=self.threshold, confidence=self.confidence)
 
         if H is None:
@@ -127,7 +109,7 @@ class FeatureMatcher:
 
             GRIC_H = self.calculate_GRIC(total_errors, len(unique_matches), model_type="H")
 
-        # Fundamentdal Sampson误差
+        # Fundamental matrix score uses Sampson approximation.
         F, mask_F = cv2.findFundamentalMat(pts1, pts2, method, ransacReprojThreshold=self.threshold, confidence=self.confidence)
         
         if F is None:
@@ -136,7 +118,7 @@ class FeatureMatcher:
             if F.shape[0] > 3:
                 F = F[:3, :]
 
-            x1 = np.hstack((pts1.reshape(-1, 2), np.ones((pts1.shape[0], 1))))  #齐次化(N,3)
+            x1 = np.hstack((pts1.reshape(-1, 2), np.ones((pts1.shape[0], 1))))
             x2 = np.hstack((pts2.reshape(-1, 2), np.ones((pts2.shape[0], 1))))
 
             Fx1 = np.dot(F, x1.T).T 
@@ -148,24 +130,23 @@ class FeatureMatcher:
 
             GRIC_F = self.calculate_GRIC(sampson_errors, len(unique_matches), model_type="F")
 
-        # 4.2 GRIC选择模型
-        # 如果 H 的内点数接近 F 的内点数 (例如 > 80%)，强制选择 H 防止平面场景被过拟合为 F
-        # 最终选择依靠两个指标 1、 GRIC 的倾向 2、内点比例 都满足才会选择更复杂的 F 模型
+        # Prefer H for planar or pure-rotation pairs when it explains nearly
+        # the same inliers as F; otherwise keep F for general 3D geometry.
         inliers_H_num = np.sum(mask_H)
         inliers_F_num = np.sum(mask_F)
         
         HF_ratio = inliers_H_num / (inliers_F_num + 1e-8)
         
-        print(f"GRIC_H: {GRIC_H:.2f}, GRIC_F: {GRIC_F:.2f}")
-        print(f"Inliers H: {inliers_H_num}, Inliers F: {inliers_F_num}, Ratio: {HF_ratio:.2f}")
+        logger.debug(f"GRIC_H: {GRIC_H:.2f}, GRIC_F: {GRIC_F:.2f}")
+        logger.debug(f"Inliers H: {inliers_H_num}, Inliers F: {inliers_F_num}, Ratio: {HF_ratio:.2f}")
 
         if GRIC_H < GRIC_F or HF_ratio > 0.8: 
-            print("Select H (Planar/Rotation)")
+            logger.debug("Selected H model (planar or rotation-like pair)")
             matches_mask = mask_H.ravel().tolist()
             model = H
             model_type = "H"
         else:
-            print("Select F (General 3D)")
+            logger.debug("Selected F model (general 3D pair)")
             matches_mask = mask_F.ravel().tolist()
             model = F
             model_type = "F"  
@@ -180,48 +161,31 @@ class FeatureMatcher:
         return model, inlier_matches, inlier_ratio, model_type, GRIC_F, GRIC_H
 
     def calculate_GRIC(self, residuals, N, model_type):
-        """
-        residuals: 每一个匹配点的残差数组 (未求和)
-        N: 所有匹配点的总数 (len(good_matches))
-        model_type: 'H' or 'F'
-
-        return:
-            GRIC_score: 越高解释性越不好
-        """
+        """Compute a simple GRIC-like model score; lower is better."""
        
-        # 设定常数
-        # 这里的 lambda 对应公式中的惩罚系数
-        # lambda_1 * d * N + lambda_2 * k
         lambda_1 = 2.0 
         lambda_2 = np.log(4) 
         
-        # 截断阈值 T 
         T = 9
         
-        # 1. 计算第一项：鲁棒残差和
         robust_residuals = np.minimum(residuals, T) 
         sum_residuals = np.sum(robust_residuals)
         
-        # 2. 设定 k 和 d
         if model_type == 'F':
-            k = 7  # F 有 7 个自由度
-            d = 3  # F 把 4D 数据压缩到 3D 流形 (1个约束)
+            k = 7
+            d = 3
         elif model_type == 'H':
-            k = 8  # H 有 8 个自由度
-            d = 2  # H 把 4D 数据压缩到 2D 流形 (2个约束)
+            k = 8
+            d = 2
         else:
             raise ValueError("Unknown model type")
             
-        # 3. 计算最终 GRIC
         gric = sum_residuals + lambda_1 * d * N + lambda_2 * k
         
         return gric
 
-    # --------- 外部调用层 ---------    
     def match_exhaustive(self, frames:list[Frame], viewgraph:ViewGraph):
-        """
-        执行全图暴力匹配并填充 ViewGraph
-        """
+        """Match every frame pair and insert valid edges into the view graph."""
         n = len(frames)
 
         total_pairs = n * (n - 1) // 2
