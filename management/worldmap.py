@@ -21,7 +21,11 @@ class Map:
 
         self._registered_ids = set()
         self._registered_sequence = []
+        self._deferred_ids = set()
         self._failed_ids = set()
+        self._failed_attempts = {}
+        self._deferred_snapshots = {}
+        self.max_register_attempts = 3
 
         self._frame_count = 0
         self._point_count = 0
@@ -63,14 +67,49 @@ class Map:
         frame.set_pose(R, t)
         self._registered_ids.add(frame.idx)
         self._registered_sequence.append(frame.idx)
+        self._deferred_ids.discard(frame.idx)
+        self._failed_attempts.pop(frame.idx, None)
+        self._deferred_snapshots.pop(frame.idx, None)
         frame.is_registered = True
 
     def add_failed_frame(self, frame_idx):
         self._failed_ids.add(frame_idx)
+        self._deferred_ids.discard(frame_idx)
+        self._deferred_snapshots.pop(frame_idx, None)
         logger.warning(f"帧 {frame_idx} 被标记为失败状态")    
+
+    def defer_frame(self, frame_idx):
+        """Delay a failed frame so it can be retried after the map grows."""
+        attempts = self._failed_attempts.get(frame_idx, 0) + 1
+        self._failed_attempts[frame_idx] = attempts
+
+        if attempts >= self.max_register_attempts:
+            self.add_failed_frame(frame_idx)
+            logger.warning(f"帧 {frame_idx} 已达到最大注册尝试次数 {attempts}，标记为永久失败。")
+            return
+
+        self._deferred_ids.add(frame_idx)
+        self._deferred_snapshots[frame_idx] = (len(self._registered_ids), len(self._points))
+        logger.info(f"帧 {frame_idx} 暂缓注册，当前尝试次数 {attempts}/{self.max_register_attempts}。")
+
+    def is_deferred_retry_ready(self, frame_idx):
+        """Return True when the map has grown since this frame was deferred."""
+        if frame_idx not in self._deferred_ids:
+            return False
+
+        reg_count, point_count = self._deferred_snapshots.get(frame_idx, (0, 0))
+        return len(self._registered_ids) > reg_count or len(self._points) > point_count
 
     @property
     def unregistered_frame_set(self):
+        return self.candidate_frame_set - self._deferred_ids
+    
+    @property
+    def deferred_frame_set(self):
+        return self._deferred_ids - self._registered_ids - self._failed_ids
+    
+    @property
+    def candidate_frame_set(self):
         return set([fid for fid in self._frames if (fid not in self._registered_ids) and (fid not in self._failed_ids)])
     
     @property

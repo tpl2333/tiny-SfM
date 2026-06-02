@@ -1,5 +1,7 @@
 import numpy as np
 
+from algorithm.errors import InsufficientMatchesError
+
 class EdgeData:
     """Verified pairwise relation between two frames in the view graph."""
 
@@ -12,7 +14,7 @@ class EdgeData:
                 dtype=np.int32
             )
         else:
-            raise ValueError(f"[EdgeData]")
+            raise InsufficientMatchesError("No verified inlier matches for view-graph edge")
 
         self.num_inliers = self.matches.shape[0]
         self.inlier_ratio = inlier_ratio

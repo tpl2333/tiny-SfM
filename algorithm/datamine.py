@@ -59,47 +59,61 @@ class DataMiner:
         """Choose the next frame for PnP registration.
 
         A good candidate observes enough existing 3D tracks and those
-        observations should be spatially distributed in the image.
+        observations should be spatially distributed in the image. Deferred
+        frames are retried only after normal candidates are exhausted.
         """
         registered_ids = worldmap.registered_frame_set
-        unregistered_ids = worldmap.unregistered_frame_set
+        candidate_groups = [
+            ("active", worldmap.unregistered_frame_set),
+            (
+                "deferred",
+                {fid for fid in worldmap.deferred_frame_set if worldmap.is_deferred_retry_ready(fid)},
+            ),
+        ]
         
-        best_frame_idx = None
-        best_score = -1
-        max_correspondences = 0
-        
-        for un_idx in unregistered_ids:
-            # Only frames connected to the current reconstruction can be registered.
-            neighbors = viewgraph.get_connected_frames(un_idx)
-            if not (neighbors & registered_ids):
-                continue
+        for group_name, frame_ids in candidate_groups:
+            best_frame_idx = None
+            best_score = -1
+            max_correspondences = 0
             
-            corr_count = 0
-            feature_indices_with_3d = []
-            frame_obj = worldmap.get_frame(un_idx)
-            num_features = len(frame_obj.kps)
-            
-            for feat_idx in range(num_features):
-                track = trackmanager.get_track_from_feat(un_idx, feat_idx)
-                if track and track.is_triangulated:
-                    corr_count += 1
-                    feature_indices_with_3d.append(feat_idx)
-            
-            # Keep a small margin above the minimal PnP sample size for RANSAC.
-            if corr_count < 12:
-                continue
-            
-            spread_score = self.calculate_spatial_spread(frame_obj, feature_indices_with_3d)
-            current_score = np.log10(corr_count) * spread_score
-            
-            if current_score > best_score:
-                best_score = current_score
-                best_frame_idx = un_idx
-                max_correspondences = corr_count
+            for un_idx in frame_ids:
+                # Only frames connected to the current reconstruction can be registered.
+                neighbors = viewgraph.get_connected_frames(un_idx)
+                if not (neighbors & registered_ids):
+                    continue
+                
+                corr_count = 0
+                feature_indices_with_3d = []
+                frame_obj = worldmap.get_frame(un_idx)
+                num_features = len(frame_obj.kps)
+                
+                for feat_idx in range(num_features):
+                    track = trackmanager.get_track_from_feat(un_idx, feat_idx)
+                    if track and track.is_triangulated:
+                        corr_count += 1
+                        feature_indices_with_3d.append(feat_idx)
+                
+                # Keep a small margin above the minimal PnP sample size for RANSAC.
+                if corr_count < 12:
+                    continue
+                
+                spread_score = self.calculate_spatial_spread(frame_obj, feature_indices_with_3d)
+                current_score = np.log10(corr_count) * spread_score
+                
+                if current_score > best_score:
+                    best_score = current_score
+                    best_frame_idx = un_idx
+                    max_correspondences = corr_count
 
-        if best_frame_idx is None:
-            logger.info("没有选定下一个候选帧")
-        elif max_correspondences < 20:
-            logger.warning(f"候选帧 {best_frame_idx} 仅有 {max_correspondences} 个 2D-3D 关联，但空间分布评分良好，尝试注册。")
+            if best_frame_idx is None:
+                continue
 
-        return best_frame_idx, max_correspondences
+            if group_name == "deferred":
+                logger.info(f"复活暂缓帧 {best_frame_idx}，当前有 {max_correspondences} 个 2D-3D 关联。")
+            elif max_correspondences < 20:
+                logger.warning(f"候选帧 {best_frame_idx} 仅有 {max_correspondences} 个 2D-3D 关联，但空间分布评分良好，尝试注册。")
+
+            return best_frame_idx, max_correspondences
+
+        logger.info("没有选定下一个候选帧")
+        return None, 0

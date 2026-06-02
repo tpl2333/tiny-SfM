@@ -104,10 +104,17 @@ class Reconstructor:
             pts_3d = np.float32([self.worldmap.get_point(i).position3d for i in pt_ids])
             K = self.worldmap.get_intrisics()
 
-            R, t, _ = self.mvgsolver.get_pose_from_pnp_iter(pts_2d, pts_3d, K)
+            was_deferred = next_frame_idx in self.worldmap.deferred_frame_set
+            R, t, inliers = self.mvgsolver.get_pose_from_pnp_iter(pts_2d, pts_3d, K)
 
             if R is None:
-                self.worldmap.add_failed_frame(next_frame_idx)
+                self.worldmap.defer_frame(next_frame_idx)
+                continue
+
+            num_inliers = 0 if inliers is None else len(inliers)
+            if was_deferred and num_inliers < 15:
+                logger.warning(f"复活帧 {next_frame_idx} PnP 内点数 {num_inliers} 偏少，继续暂缓。")
+                self.worldmap.defer_frame(next_frame_idx)
                 continue
 
             self.worldmap.register_frame(next_frame_idx, R, t)
@@ -199,6 +206,13 @@ class Reconstructor:
         global_fixed_frame_ids = [self.canonical_f1_idx, self.canonical_f2_idx]
         self.ba.run_global_ba(global_fixed_frame_ids, True)
         self.cleanup_map_points()
+        logger.info(
+            "重建完成: "
+            f"registered={len(self.worldmap.registered_frame_set)}, "
+            f"deferred={len(self.worldmap.deferred_frame_set)}, "
+            f"failed={len(self.worldmap.failed_frame_set)}, "
+            f"points={len(self.worldmap._points)}"
+        )
 
     def add_new_points_safely(self, point_info):
         """Create map points and synchronize their owning tracks."""
@@ -301,7 +315,7 @@ if __name__ == "__main__":
     from model.camera import Camera
     from incremental_unordered import Reconstructor
 
-    img_dir = "./data/synthetic/ship/test"
+    img_dir = "E:/dataset/nerf_synthetic/nerf_synthetic/chair/train"
     
     cam = Camera(height=800,width=800)
     cam.setup_by_guess(fov_scale=1.5625)
@@ -311,7 +325,7 @@ if __name__ == "__main__":
         
         recon.run()
 
-        output_colmap_dir = "./output/synthetic/ship"
+        output_colmap_dir = "./output/synthetic/train/chair"
         recon.worldmap.save_as_colmap(output_colmap_dir, recon.trackmanager)
         
         visualize_reconstruction(recon)

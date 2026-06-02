@@ -130,10 +130,13 @@ class FeatureMatcher:
 
             GRIC_F = self.calculate_GRIC(sampson_errors, len(unique_matches), model_type="F")
 
+        if mask_H is None and mask_F is None:
+            raise InsufficientMatchesError("[match] Geometric verification failed for both H and F.")
+
         # Prefer H for planar or pure-rotation pairs when it explains nearly
         # the same inliers as F; otherwise keep F for general 3D geometry.
-        inliers_H_num = np.sum(mask_H)
-        inliers_F_num = np.sum(mask_F)
+        inliers_H_num = 0 if mask_H is None else np.sum(mask_H)
+        inliers_F_num = 0 if mask_F is None else np.sum(mask_F)
         
         HF_ratio = inliers_H_num / (inliers_F_num + 1e-8)
         
@@ -141,11 +144,15 @@ class FeatureMatcher:
         logger.debug(f"Inliers H: {inliers_H_num}, Inliers F: {inliers_F_num}, Ratio: {HF_ratio:.2f}")
 
         if GRIC_H < GRIC_F or HF_ratio > 0.8: 
+            if mask_H is None:
+                raise InsufficientMatchesError("[match] Homography selected but has no inlier mask.")
             logger.debug("Selected H model (planar or rotation-like pair)")
             matches_mask = mask_H.ravel().tolist()
             model = H
             model_type = "H"
         else:
+            if mask_F is None:
+                raise InsufficientMatchesError("[match] Fundamental matrix selected but has no inlier mask.")
             logger.debug("Selected F model (general 3D pair)")
             matches_mask = mask_F.ravel().tolist()
             model = F
@@ -157,6 +164,8 @@ class FeatureMatcher:
                 inlier_matches.append(match)
             
         inlier_ratio = len(inlier_matches)/len(unique_matches)
+        if not inlier_matches:
+            raise InsufficientMatchesError("[match] No inliers after geometric verification.")
 
         return model, inlier_matches, inlier_ratio, model_type, GRIC_F, GRIC_H
 
